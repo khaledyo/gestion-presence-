@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
-import 'home.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+
+// 🔸 On importe maintenant les deux dashboards
+import 'dashboard_etudiant.dart';
+import 'dashboard_enseignant.dart';
 
 class MyLogin extends StatefulWidget {
   const MyLogin({Key? key}) : super(key: key);
@@ -11,13 +14,12 @@ class MyLogin extends StatefulWidget {
 }
 
 class _MyLoginState extends State<MyLogin> {
-  // 🔹 Les contrôleurs pour email et mot de passe
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
   bool _isLoading = false;
 
-  // 🔥 Fonction de connexion Firebase
+  // 🔥 Fonction de connexion Firebase avec redirection par rôle
   Future<void> _login() async {
     if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -29,28 +31,37 @@ class _MyLoginState extends State<MyLogin> {
     setState(() => _isLoading = true);
 
     try {
-      // 🔐 Connexion Firebase Auth
+      // ✅ Connexion à Firebase Authentication
       final userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
 
-      // 🔥 Récupération des infos Firestore
+      final uid = userCredential.user!.uid;
+
+      // ✅ Récupération du document Firestore de l’utilisateur
       final userDoc = await FirebaseFirestore.instance
           .collection('users')
-          .doc(userCredential.user!.uid)
+          .doc(uid)
           .get();
 
-      final userName = userDoc['nom'];
-      final role = userDoc['role'];
+      if (!userDoc.exists) {
+        throw Exception("Profil utilisateur introuvable !");
+      }
 
-      // ✅ Redirection vers la page d’accueil
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => HomePage(userName: userName, role: role),
-        ),
-      );
+      final userName = userDoc['nom'] ?? 'Utilisateur';
+      final role = userDoc['role'] ?? 'Étudiant';
+
+      // ✅ Redirection selon le rôle
+      if (role == "Enseignant") {
+        Navigator.pushReplacement( context,
+          MaterialPageRoute( builder: (_) => DashboardEnseignant( userName: userName, userUid: uid, ), ), );
+      } else {
+        Navigator.pushReplacement( context,
+          MaterialPageRoute( builder: (_) =>
+              DashboardEtudiant( userName: userName, userUid: uid, ), ), );
+      }
+
     } on FirebaseAuthException catch (e) {
       String message = "Erreur : ${e.message}";
       if (e.code == 'user-not-found') {
@@ -98,17 +109,13 @@ class _MyLoginState extends State<MyLogin> {
               const SizedBox(height: 8),
               const Text(
                 "Connectez-vous pour continuer",
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Color(0xFF212121),
-                ),
+                style: TextStyle(fontSize: 16, color: Color(0xFF212121)),
               ),
               const SizedBox(height: 30),
 
-              // Email
+              // Champs Email
               TextField(
                 controller: _emailController,
-                style: const TextStyle(color: Colors.black87),
                 decoration: InputDecoration(
                   labelText: "Adresse e-mail",
                   labelStyle: const TextStyle(color: Color(0xFF0D47A1)),
@@ -118,19 +125,15 @@ class _MyLoginState extends State<MyLogin> {
                     borderRadius: BorderRadius.circular(15),
                     borderSide: BorderSide.none,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    vertical: 18,
-                    horizontal: 20,
-                  ),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
                 ),
               ),
               const SizedBox(height: 20),
 
-              // Mot de passe
+              // Champs Mot de passe
               TextField(
                 controller: _passwordController,
                 obscureText: true,
-                style: const TextStyle(color: Colors.black87),
                 decoration: InputDecoration(
                   labelText: "Mot de passe",
                   labelStyle: const TextStyle(color: Color(0xFF0D47A1)),
@@ -140,10 +143,7 @@ class _MyLoginState extends State<MyLogin> {
                     borderRadius: BorderRadius.circular(15),
                     borderSide: BorderSide.none,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    vertical: 18,
-                    horizontal: 20,
-                  ),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
                 ),
               ),
 
@@ -152,14 +152,7 @@ class _MyLoginState extends State<MyLogin> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: () {
-                    // plus tard tu pourras ajouter reset password ici
-                  },
-                  style: TextButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    minimumSize: const Size(0, 0),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
+                  onPressed: () {},
                   child: const Text(
                     "Mot de passe oublié ?",
                     style: TextStyle(
@@ -171,7 +164,6 @@ class _MyLoginState extends State<MyLogin> {
                   ),
                 ),
               ),
-
               const SizedBox(height: 15),
 
               // Bouton de connexion
@@ -205,10 +197,8 @@ class _MyLoginState extends State<MyLogin> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text(
-                    "Vous n’avez pas de compte ? ",
-                    style: TextStyle(color: Color(0xFF212121)),
-                  ),
+                  const Text("Vous n’avez pas de compte ? ",
+                      style: TextStyle(color: Color(0xFF212121))),
                   GestureDetector(
                     onTap: () {
                       Navigator.pushNamed(context, 'register');

@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'firebase_options.dart'; // ✅ généré automatiquement
+import 'firebase_options.dart';
 
-import 'package:presence_app/login.dart';
-import 'package:presence_app/register.dart';
-import 'package:presence_app/home.dart';
+import 'login.dart';
+import 'register.dart';
+import 'dashboard_etudiant.dart';
+import 'dashboard_enseignant.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   runApp(MaterialApp(
     debugShowCheckedModeBanner: false,
@@ -20,11 +20,6 @@ void main() async {
     routes: {
       'register': (context) => const MyRegister(),
       'login': (context) => const MyLogin(),
-      'home': (context) => const HomePage(
-
-        userName: "Utilisateur",
-        role: "Étudiant",
-      ),
     },
   ));
 }
