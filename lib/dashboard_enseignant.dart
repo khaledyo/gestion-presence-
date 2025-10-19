@@ -5,8 +5,8 @@ import 'attendance_list.dart';
 import 'attendance_stats.dart';
 
 class DashboardEnseignant extends StatefulWidget {
-  final String userUid;  // UID Firebase
-  final String userName; // Nom  l’enseignant
+  final String userUid;
+  final String userName;
 
   const DashboardEnseignant({
     Key? key,
@@ -23,28 +23,58 @@ class DashboardEnseignant extends StatefulWidget {
 class _DashboardEnseignantState extends State<DashboardEnseignant> {
   int _selectedIndex = 0;
 
-  // Stream des classes de l'enseignant
+  // Liste d'icônes élargie (université / informatique / domaines associés)
+  final List<IconData> classIcons = const [
+    Icons.school,
+    Icons.menu_book,
+    Icons.computer,
+    Icons.science,
+    Icons.architecture,
+    Icons.group,
+    Icons.calculate,
+    Icons.psychology,
+    Icons.model_training,
+    Icons.code, // programmation
+    Icons.memory, // hardware / architecture
+    Icons.language, // réseaux / langages
+    Icons.storage, // bases de données
+    Icons.cloud, // cloud
+    Icons.smart_toy, // IA / ML
+    Icons.engineering, // génie / génie logiciel
+    Icons.laptop_mac, // informatique générale
+  ];
+
+  // Stream trié pour avoir les classes les plus récentes en premier
   Stream<QuerySnapshot> getClassesStream() {
     return FirebaseFirestore.instance
         .collection('classes')
         .where('enseignantUid', isEqualTo: widget.userUid)
+        .orderBy('createdAt', descending: true)
         .snapshots();
   }
 
   void _onItemTapped(int index) => setState(() => _selectedIndex = index);
 
-  void openAttendancePage(Map<String, dynamic> classData) {
+  void openAttendancePage(String classId, Map<String, dynamic> data) {
+    final classData = {
+      ...data,
+      'id': classId,
+    };
+
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AttendanceList(classData: classData),
+        builder: (_) => AttendanceList(
+          classData: classData,
+          classId: classId,
+        ),
       ),
     );
   }
 
   List<Widget> _buildPages() {
     return [
-      // MES CLASSES
+      // --- MES CLASSES ---
       Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -57,9 +87,11 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                     await Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => CreateClassPage(enseignantUid: widget.userUid),
+                        builder: (_) =>
+                            CreateClassPage(enseignantUid: widget.userUid),
                       ),
                     );
+                    // pas besoin de setState ici : StreamBuilder rafraîchira
                   },
                   icon: const Icon(Icons.add, color: Colors.white),
                   label: const Text(
@@ -86,33 +118,52 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
 
                   final docs = snapshot.data?.docs ?? [];
                   if (docs.isEmpty) {
-                    return const Center(child: Text('Aucune classe. Créez-en une.'));
+                    return const Center(
+                        child: Text('Aucune classe. Créez-en une.'));
                   }
 
                   return GridView.builder(
                     itemCount: docs.length,
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    gridDelegate:
+                    const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 2,
                       crossAxisSpacing: 12,
                       mainAxisSpacing: 12,
-                      childAspectRatio: 0.95, // plus de hauteur pour le contenu
+                      childAspectRatio: 0.95,
                     ),
                     itemBuilder: (context, index) {
-                      final data = docs[index].data() as Map<String, dynamic>;
+                      final doc = docs[index];
+                      final data = doc.data() as Map<String, dynamic>;
+
+                      // Récupère l'index de l'icône sauvegardé (fallback à 0)
+                      final rawIcon = data['iconIndex'];
+                      final int savedIconIndex = (rawIcon is int)
+                          ? rawIcon
+                          : int.tryParse(rawIcon?.toString() ?? '') ?? 0;
+
+                      final currentIcon = classIcons[
+                      savedIconIndex % classIcons.length]; // safe fallback
+
                       return GestureDetector(
-                        onTap: () => openAttendancePage({
-                          'id': docs[index].id,
-                          ...data,
-                        }),
+                        onTap: () => openAttendancePage(
+                          doc.id,
+                          {
+                            'nom': data['nom'],
+                            'horaire': data['horaire'],
+                            'nombreEtudiants':
+                            (data['studentsUid'] as List?)?.length ?? 0,
+                            'iconIndex': savedIconIndex,
+                          },
+                        ),
                         child: Container(
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(15),
                             color: Colors.white,
-                            boxShadow: [
+                            boxShadow: const [
                               BoxShadow(
                                 color: Colors.black12,
                                 blurRadius: 4,
-                                offset: const Offset(0, 2),
+                                offset: Offset(0, 2),
                               ),
                             ],
                           ),
@@ -120,10 +171,12 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Icon(Icons.class_, size: 35, color: DashboardEnseignant.primaryColor),
+                              Icon(currentIcon,
+                                  size: 35,
+                                  color: DashboardEnseignant.primaryColor),
                               const SizedBox(height: 10),
                               Text(
-                                data['nom'] ?? 'Sans nom',
+                                (data['nom'] as String?) ?? 'Sans nom',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 16,
@@ -134,18 +187,21 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                'Horaire: ${data['horaire'] ?? ''}',
-                                style: const TextStyle(color: Colors.grey, fontSize: 14),
+                                'Horaire: ${(data['horaire'] as String?) ?? ''}',
+                                style: const TextStyle(
+                                    color: Colors.grey, fontSize: 14),
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                'Nombre d\'étudiants: ${data['nombreEtudiants'] ?? 0}',
-                                style: const TextStyle(color: Colors.grey, fontSize: 14),
+                                'Étudiants: ${(data['studentsUid'] as List?)?.length ?? 0}',
+                                style: const TextStyle(
+                                    color: Colors.grey, fontSize: 14),
                               ),
                               const Spacer(),
-                              Align(
+                              const Align(
                                 alignment: Alignment.bottomRight,
-                                child: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                                child: Icon(Icons.arrow_forward_ios,
+                                    size: 16, color: Colors.grey),
                               ),
                             ],
                           ),
@@ -160,17 +216,18 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         ),
       ),
 
-      // PRÉSENCE
-      Center(
+      // --- Onglet Présence (simple info) ---
+      const Center(
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(20),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
-            children: const [
-              Icon(Icons.qr_code_scanner, size: 100, color: DashboardEnseignant.primaryColor),
+            children: [
+              Icon(Icons.qr_code_scanner,
+                  size: 100, color: DashboardEnseignant.primaryColor),
               SizedBox(height: 20),
               Text(
-                "Scannez le QR Code généré\nou sélectionnez une classe pour marquer la présence.",
+                "Sélectionnez une classe dans l'onglet 'Mes Classes'\npour générer le QR Code et marquer la présence.",
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey, fontSize: 16, height: 1.5),
               ),
@@ -179,7 +236,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         ),
       ),
 
-      // STATISTIQUES
+      // --- Statistiques ---
       const AttendanceStats(),
     ];
   }
@@ -225,11 +282,12 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         ),
         actions: [
           TextButton.icon(
-            onPressed: () {
-              Navigator.pushReplacementNamed(context, 'login');
-            },
-            icon: const Icon(Icons.logout, size: 18, color: DashboardEnseignant.primaryColor),
-            label: const Text('Déconnexion', style: TextStyle(color: DashboardEnseignant.primaryColor)),
+            onPressed: () =>
+                Navigator.pushReplacementNamed(context, 'login'),
+            icon: const Icon(Icons.logout,
+                size: 18, color: DashboardEnseignant.primaryColor),
+            label: const Text('Déconnexion',
+                style: TextStyle(color: DashboardEnseignant.primaryColor)),
           ),
         ],
       ),
@@ -248,9 +306,12 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
           backgroundColor: Colors.white,
           elevation: 0,
           items: const [
-            BottomNavigationBarItem(icon: Icon(Icons.class_), label: 'Mes Classes'),
-            BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: 'Présence'),
-            BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: 'Statistiques'),
+            BottomNavigationBarItem(
+                icon: Icon(Icons.class_), label: 'Mes Classes'),
+            BottomNavigationBarItem(
+                icon: Icon(Icons.qr_code_scanner), label: 'Présence'),
+            BottomNavigationBarItem(
+                icon: Icon(Icons.bar_chart), label: 'Statistiques'),
           ],
         ),
       ),
