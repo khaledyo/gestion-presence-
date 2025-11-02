@@ -2,7 +2,7 @@
 
     <!-- 🔥 Permission nécessaire pour Firebase Auth / Firestore / Storage -->
     <uses-permission android:name="android.permission.INTERNET" />
-
+	<uses-permission android:name="android.permission.CAMERA" />
     <application
         android:label="presence_app"
         android:name="${applicationName}"
