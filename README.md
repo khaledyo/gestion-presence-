@@ -61,16 +61,16 @@ Chaque utilisateur dispose de fonctionnalités adaptées à son rôle, facilitan
 <img width="300" alt="Register Page" src="https://github.com/user-attachments/assets/490c8e35-267f-4af3-9445-07307ebe80d0" />
 
 ### Espace Enseignant
-<img width="300" alt="image" src="https://github.com/user-attachments/assets/dcbd8e62-21dc-4091-b1ef-1cf6a2f90c04" />
+<img width="200" alt="image" src="https://github.com/user-attachments/assets/dcbd8e62-21dc-4091-b1ef-1cf6a2f90c04" />
 
-<img width="300" alt="Add Session" src="https://github.com/user-attachments/assets/ae110f41-6e8d-4423-8ebd-1a540e4f1d61" />
-<img width="300" alt="QR Code Page" src="https://github.com/user-attachments/assets/5c385487-6cc4-4f56-8d32-9ab42889f68e" />
+<img width="200" alt="Add Session" src="https://github.com/user-attachments/assets/ae110f41-6e8d-4423-8ebd-1a540e4f1d61" />
+<img width="200" alt="QR Code Page" src="https://github.com/user-attachments/assets/5c385487-6cc4-4f56-8d32-9ab42889f68e" />
 
 ### Espace Étudiant
 
-<img width="300" alt="image" src="https://github.com/user-attachments/assets/6b501a2d-4c49-45e6-bb68-2cfa599857a5" />
-<img width="300" alt="image" src="https://github.com/user-attachments/assets/02a511ce-17e2-499c-b782-7dd70bc59b3f" />
-<img width="300" alt="image" src="https://github.com/user-attachments/assets/a1770495-6e18-4919-b6a3-a00e4263b989" />
+<img width="200" alt="image" src="https://github.com/user-attachments/assets/6b501a2d-4c49-45e6-bb68-2cfa599857a5" />
+<img width="200" alt="image" src="https://github.com/user-attachments/assets/02a511ce-17e2-499c-b782-7dd70bc59b3f" />
+<img width="200" alt="image" src="https://github.com/user-attachments/assets/a1770495-6e18-4919-b6a3-a00e4263b989" />
 
 
 
