@@ -7,12 +7,16 @@ class QRScannerPage extends StatefulWidget {
   final String classId;
   final String className;
   final String userUid;
+  final String? sessionId;
+  final String? teacherName;
 
   const QRScannerPage({
     Key? key,
     required this.classId,
     required this.className,
     required this.userUid,
+    this.sessionId,
+    this.teacherName,
   }) : super(key: key);
 
   @override
@@ -47,12 +51,30 @@ class _QRScannerPageState extends State<QRScannerPage> {
     });
 
     try {
-      final sessionDoc = await FirebaseFirestore.instance
+      // Vérifier d'abord si c'est un QR code de session
+      final sessionQuery = await FirebaseFirestore.instance
+          .collection('classes')
+          .doc(widget.classId)
+          .collection('sessions')
+          .where('qrCode', isEqualTo: qrData)
+          .get();
+
+      if (sessionQuery.docs.isNotEmpty) {
+        // QR code de session trouvé
+        final sessionDoc = sessionQuery.docs.first;
+        final sessionData = sessionDoc.data();
+
+        await _markAttendanceInSession(sessionDoc.reference, sessionData);
+        return;
+      }
+
+      // Si pas trouvé dans les sessions, vérifier dans attendances
+      final attendanceDoc = await FirebaseFirestore.instance
           .collection('attendances')
           .doc(qrData)
           .get();
 
-      if (!sessionDoc.exists) {
+      if (!attendanceDoc.exists) {
         _showResultDialog(
           'QR Code invalide',
           'Cette session de présence n\'existe pas.',
@@ -61,9 +83,9 @@ class _QRScannerPageState extends State<QRScannerPage> {
         return;
       }
 
-      final sessionData = sessionDoc.data()!;
+      final attendanceData = attendanceDoc.data()!;
 
-      if (sessionData['classId'] != widget.classId) {
+      if (attendanceData['classId'] != widget.classId) {
         _showResultDialog(
           'Classe incorrecte',
           'Ce QR Code ne correspond pas à cette classe.',
@@ -72,7 +94,7 @@ class _QRScannerPageState extends State<QRScannerPage> {
         return;
       }
 
-      if (sessionData['isClosed'] == true) {
+      if (attendanceData['isClosed'] == true) {
         _showResultDialog(
           'Session fermée',
           'Cette session de présence est déjà clôturée.',
@@ -81,7 +103,7 @@ class _QRScannerPageState extends State<QRScannerPage> {
         return;
       }
 
-      final presentStudents = List<String>.from(sessionData['presentStudentsUid'] ?? []);
+      final presentStudents = List<String>.from(attendanceData['presentStudentsUid'] ?? []);
 
       if (!presentStudents.contains(widget.userUid)) {
         presentStudents.add(widget.userUid);
@@ -92,6 +114,9 @@ class _QRScannerPageState extends State<QRScannerPage> {
             .update({
           'presentStudentsUid': presentStudents,
         });
+
+        // Créer aussi un enregistrement dans l'historique
+        await _createHistoryRecord(attendanceData);
 
         _showResultDialog(
           'Présence enregistrée !',
@@ -117,6 +142,66 @@ class _QRScannerPageState extends State<QRScannerPage> {
         isLoading = false;
       });
     }
+  }
+
+  Future<void> _markAttendanceInSession(DocumentReference sessionRef, Map<String, dynamic> sessionData) async {
+    try {
+      final presentStudents = List<String>.from(sessionData['presentStudents'] ?? []);
+
+      if (!presentStudents.contains(widget.userUid)) {
+        presentStudents.add(widget.userUid);
+
+        await sessionRef.update({
+          'presentStudents': presentStudents,
+          'presentCount': FieldValue.increment(1),
+        });
+
+        // Créer un enregistrement dans l'historique
+        await FirebaseFirestore.instance.collection('attendance_history').add({
+          'classId': widget.classId,
+          'className': widget.className,
+          'userId': widget.userUid,
+          'userName': 'Étudiant', // Vous pouvez récupérer le nom depuis Firestore
+          'date': Timestamp.now(),
+          'status': 'present',
+          'scannedAt': Timestamp.now(),
+          'teacherName': widget.teacherName ?? 'Enseignant inconnu',
+          'sessionId': sessionRef.id,
+          'startTime': sessionData['startTime'],
+          'endTime': sessionData['endTime'],
+        });
+
+        _showResultDialog(
+          'Présence enregistrée !',
+          'Votre présence a été validée pour ${widget.className}',
+          true,
+        );
+      } else {
+        _showResultDialog(
+          'Déjà présent',
+          'Vous avez déjà marqué votre présence pour cette session.',
+          true,
+        );
+      }
+    } catch (e) {
+      throw e;
+    }
+  }
+
+  Future<void> _createHistoryRecord(Map<String, dynamic> attendanceData) async {
+    await FirebaseFirestore.instance.collection('attendance_history').add({
+      'classId': widget.classId,
+      'className': widget.className,
+      'userId': widget.userUid,
+      'userName': 'Étudiant',
+      'date': Timestamp.now(),
+      'status': 'present',
+      'scannedAt': Timestamp.now(),
+      'teacherName': widget.teacherName ?? 'Enseignant inconnu',
+      'attendanceId': attendanceData['id'],
+      'startTime': attendanceData['startTime'],
+      'endTime': attendanceData['endTime'],
+    });
   }
 
   void _showResultDialog(String title, String message, bool isSuccess) {

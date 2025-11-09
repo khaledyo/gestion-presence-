@@ -1,4 +1,5 @@
-// lib/pages/student/classes_list_page.dart
+// lib/pages/classes_list_page.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -16,47 +17,147 @@ class ClassesListPage extends StatefulWidget {
 class _ClassesListPageState extends State<ClassesListPage> {
   List<Map<String, dynamic>> classes = [];
   bool isLoading = true;
+  StreamSubscription? _classesSubscription;
+  Map<String, StreamSubscription> _sessionSubscriptions = {};
 
   static const Color primaryColor = Color(0xFF6366F1);
   static const Color backgroundColor = Color(0xFFF8FAFC);
   static const Color surfaceColor = Colors.white;
   static const Color textPrimary = Color(0xFF1F2937);
   static const Color textSecondary = Color(0xFF6B7280);
+  static const Color successColor = Color(0xFF10B981);
+  static const Color warningColor = Color(0xFFF59E0B);
 
   @override
   void initState() {
     super.initState();
-    _loadUserClasses();
+    _setupRealtimeUpdates();
   }
 
-  Future<void> _loadUserClasses() async {
-    try {
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection('classes')
-          .where('studentsUid', arrayContains: widget.userUid)
-          .get();
+  @override
+  void dispose() {
+    _classesSubscription?.cancel();
+    // Annuler toutes les souscriptions aux sessions
+    _sessionSubscriptions.forEach((key, subscription) {
+      subscription.cancel();
+    });
+    super.dispose();
+  }
 
-      final List<Map<String, dynamic>> loadedClasses = [];
+  void _setupRealtimeUpdates() {
+    // Écouter les changements sur la collection des classes
+    _classesSubscription = FirebaseFirestore.instance
+        .collection('classes')
+        .where('studentsUid', arrayContains: widget.userUid)
+        .snapshots()
+        .listen((snapshot) {
+      _processClassesUpdate(snapshot);
+    });
+  }
 
-      for (final doc in querySnapshot.docs) {
-        final data = doc.data();
-        loadedClasses.add({
-          'id': doc.id,
-          'nom': data['nom'] ?? 'Classe sans nom',
-          'description': data['description'] ?? '',
-          'enseignant': data['enseignant'] ?? 'Enseignant inconnu',
-          'createdAt': data['createdAt'],
-        });
+  void _processClassesUpdate(QuerySnapshot snapshot) {
+    final List<Map<String, dynamic>> updatedClasses = [];
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+
+      // Récupérer les informations de l'enseignant
+      String teacherName = 'Enseignant inconnu';
+      String? teacherUid = data['enseignantUid'] ?? data['teacherUid'];
+
+      if (teacherUid != null && teacherUid.isNotEmpty) {
+        // Écouter les changements de l'enseignant en temps réel
+        _setupTeacherListener(teacherUid, doc.id);
       }
 
-      setState(() {
-        classes = loadedClasses;
-        isLoading = false;
+      updatedClasses.add({
+        'id': doc.id,
+        'nom': data['nom'] ?? 'Classe sans nom',
+        'description': data['description'] ?? '',
+        'enseignant': teacherName,
+        'enseignantUid': teacherUid,
+        'createdAt': data['createdAt'],
+        'hasActiveSession': false, // Valeur par défaut
       });
-    } catch (e) {
-      print('Erreur chargement classes: $e');
-      setState(() => isLoading = false);
+
+      // Écouter les changements des sessions pour cette classe
+      _setupSessionListener(doc.id);
     }
+
+    setState(() {
+      classes = updatedClasses;
+      isLoading = false;
+    });
+  }
+
+  void _setupTeacherListener(String teacherUid, String classId) {
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(teacherUid)
+        .snapshots()
+        .listen((teacherDoc) {
+      if (teacherDoc.exists) {
+        final teacherData = teacherDoc.data();
+        final teacherName = teacherData?['nom'] ?? teacherData?['name'] ?? 'Enseignant inconnu';
+
+        setState(() {
+          final classIndex = classes.indexWhere((c) => c['id'] == classId);
+          if (classIndex != -1) {
+            classes[classIndex]['enseignant'] = teacherName;
+          }
+        });
+      }
+    });
+  }
+
+  void _setupSessionListener(String classId) {
+    // Écouter les sessions actives dans attendances
+    final attendanceSubscription = FirebaseFirestore.instance
+        .collection('attendances')
+        .where('classId', isEqualTo: classId)
+        .where('isClosed', isEqualTo: false)
+        .snapshots()
+        .listen((snapshot) {
+      final hasActiveAttendance = snapshot.docs.isNotEmpty;
+      if (hasActiveAttendance) {
+        final session = snapshot.docs.first;
+        final expiresAt = (session.data()['expiresAt'] as Timestamp?)?.toDate();
+        final isActive = expiresAt != null && DateTime.now().isBefore(expiresAt);
+        _updateClassSessionStatus(classId, isActive);
+      } else {
+        _updateClassSessionStatus(classId, false);
+      }
+    });
+
+    // Écouter les sessions dans l'ancien système
+    final sessionSubscription = FirebaseFirestore.instance
+        .collection('classes')
+        .doc(classId)
+        .collection('sessions')
+        .snapshots()
+        .listen((snapshot) {
+      final hasActiveSession = snapshot.docs.any((doc) {
+        final data = doc.data();
+        final isActive = data['isActive'] ?? false;
+        final isExpired = data['isExpired'] ?? false;
+        final qrCode = data['qrCode'] ?? '';
+        return isActive && !isExpired && qrCode.isNotEmpty;
+      });
+      _updateClassSessionStatus(classId, hasActiveSession);
+    });
+
+    // Stocker les souscriptions pour pouvoir les annuler plus tard
+    _sessionSubscriptions['$classId-attendance'] = attendanceSubscription;
+    _sessionSubscriptions['$classId-session'] = sessionSubscription;
+  }
+
+  void _updateClassSessionStatus(String classId, bool hasActiveSession) {
+    setState(() {
+      final classIndex = classes.indexWhere((c) => c['id'] == classId);
+      if (classIndex != -1) {
+        classes[classIndex]['hasActiveSession'] = hasActiveSession;
+      }
+    });
   }
 
   @override
@@ -64,7 +165,7 @@ class _ClassesListPageState extends State<ClassesListPage> {
     return Scaffold(
       backgroundColor: backgroundColor,
       appBar: AppBar(
-        title: const Text('Mes Classes'),
+        title: const Text('Mes Cours'),
         backgroundColor: surfaceColor,
         foregroundColor: textPrimary,
         elevation: 0,
@@ -95,7 +196,7 @@ class _ClassesListPageState extends State<ClassesListPage> {
           ),
           const SizedBox(height: 16),
           Text(
-            'Chargement de vos classes...',
+            'Chargement de vos cours...',
             style: TextStyle(color: textSecondary),
           ),
         ],
@@ -108,10 +209,10 @@ class _ClassesListPageState extends State<ClassesListPage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.class_rounded, size: 80, color: textSecondary.withOpacity(0.3)),
+          Icon(Icons.school_rounded, size: 80, color: textSecondary.withOpacity(0.3)),
           const SizedBox(height: 16),
           Text(
-            'Aucune classe trouvée',
+            'Aucun cours trouvé',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w600,
@@ -120,7 +221,7 @@ class _ClassesListPageState extends State<ClassesListPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Les enseignants vous ajouteront à leurs classes',
+            'Vos enseignants vous ajouteront à leurs cours',
             style: TextStyle(color: textSecondary),
             textAlign: TextAlign.center,
           ),
@@ -143,6 +244,8 @@ class _ClassesListPageState extends State<ClassesListPage> {
   }
 
   Widget _buildClassCard(Map<String, dynamic> classe) {
+    final isQrAvailable = classe['hasActiveSession'] ?? false;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -186,6 +289,36 @@ class _ClassesListPageState extends State<ClassesListPage> {
                 fontSize: 12,
               ),
             ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: isQrAvailable ? successColor.withOpacity(0.1) : warningColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: isQrAvailable ? successColor : warningColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    isQrAvailable ? 'Présence ouverte' : 'Présence fermée',
+                    style: TextStyle(
+                      color: isQrAvailable ? successColor : warningColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             if (classe['description'] != null && classe['description'].isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
@@ -205,25 +338,52 @@ class _ClassesListPageState extends State<ClassesListPage> {
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            color: primaryColor.withOpacity(0.1),
+            color: isQrAvailable
+                ? primaryColor.withOpacity(0.1)
+                : Colors.grey.withOpacity(0.1),
             shape: BoxShape.circle,
           ),
           child: IconButton(
-            icon: Icon(Icons.qr_code_scanner_rounded, color: primaryColor, size: 20),
+            icon: Icon(
+                Icons.qr_code_scanner_rounded,
+                color: isQrAvailable ? primaryColor : Colors.grey,
+                size: 20
+            ),
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => QRScannerPage(
-                    classId: classe['id'],
-                    className: classe['nom'],
-                    userUid: widget.userUid,
+              if (isQrAvailable) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => QRScannerPage(
+                      classId: classe['id'],
+                      className: classe['nom'],
+                      userUid: widget.userUid,
+                      teacherName: classe['enseignant'],
+                    ),
                   ),
-                ),
-              );
+                );
+              } else {
+                _showQrNotAvailableDialog(context);
+              }
             },
           ),
         ),
+      ),
+    );
+  }
+
+  void _showQrNotAvailableDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Présence non disponible'),
+        content: const Text('La présence n\'est pas encore ouverte pour ce cours.\n\nVeuillez attendre que votre enseignant active le QR Code.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Compris'),
+          ),
+        ],
       ),
     );
   }

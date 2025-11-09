@@ -1,23 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'dart:async';
 
 import 'create_class_page.dart';
 import 'attendance_list.dart';
-import 'attendance_stats.dart';
+import 'history_details_page.dart';
 
 class DashboardEnseignant extends StatefulWidget {
   final String userUid;
   final String userName;
+  final String userEmail;
 
   const DashboardEnseignant({
     Key? key,
     required this.userUid,
     required this.userName,
+    required this.userEmail,
   }) : super(key: key);
 
-  static const Color primaryColor = Color(0xFF1A237E);
-  static const Color secondaryColor = Color(0xFF5C6BC0);
+  static const Color primaryColor = Color(0xFF6366F1);
+  static const Color secondaryColor = Color(0xFF8B5CF6);
   static const Color backgroundColor = Color(0xFFF8FAFD);
   static const Color surfaceColor = Colors.white;
   static const Color textColor = Color(0xFF2D3748);
@@ -30,6 +33,8 @@ class DashboardEnseignant extends StatefulWidget {
 class _DashboardEnseignantState extends State<DashboardEnseignant> {
   int _selectedIndex = 0;
   bool _isDeleteMode = false;
+  bool _isEditMode = false;
+  String? _userEmail;
 
   final List<IconData> classIcons = const [
     Icons.school_outlined,
@@ -51,6 +56,37 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     Icons.laptop_mac_outlined,
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    _fetchUserEmail();
+  }
+
+  Future<void> _fetchUserEmail() async {
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.userUid)
+          .get();
+
+      if (userDoc.exists) {
+        final userData = userDoc.data() as Map<String, dynamic>;
+        setState(() {
+          _userEmail = userData['email'] ?? widget.userEmail;
+        });
+      } else {
+        setState(() {
+          _userEmail = widget.userEmail;
+        });
+      }
+    } catch (e) {
+      print('Erreur récupération email: $e');
+      setState(() {
+        _userEmail = widget.userEmail;
+      });
+    }
+  }
+
   Stream<QuerySnapshot> getClassesStream() {
     return FirebaseFirestore.instance
         .collection('classes')
@@ -59,10 +95,18 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         .snapshots();
   }
 
+  Stream<QuerySnapshot> getHistoryStream() {
+    return FirebaseFirestore.instance
+        .collection('attendance_history')
+        .where('teacherUid', isEqualTo: widget.userUid)
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
   void _onItemTapped(int index) => setState(() => _selectedIndex = index);
 
   void openAttendancePage(String classId, Map<String, dynamic> data) {
-    if (_isDeleteMode) return;
+    if (_isDeleteMode || _isEditMode) return;
     final classData = {...data, 'id': classId};
 
     Navigator.push(
@@ -71,6 +115,18 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         builder: (_) => AttendanceList(
           classData: classData,
           classId: classId,
+        ),
+      ),
+    );
+  }
+
+  void _openHistoryDetails(Map<String, dynamic> data, String historyId) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => HistoryDetailsPage(
+          historyData: data,
+          historyId: historyId,
         ),
       ),
     );
@@ -99,14 +155,38 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     }
   }
 
+  Future<void> editClass(String classId, Map<String, dynamic> data) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => EditClassDialog(
+        classId: classId,
+        initialData: data,
+        enseignantUid: widget.userUid,
+        userName: widget.userName,
+      ),
+    );
+
+    if (result == true) {
+      setState(() {
+        _isEditMode = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Séance modifiée avec succès ✅'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          backgroundColor: DashboardEnseignant.primaryColor,
+        ),
+      );
+    }
+  }
+
   List<Widget> _buildPages() {
     return [
-      // --- MES CLASSES ---
       _buildClassesPage(),
-      // --- PRÉSENCE ---
-      _buildAttendancePage(),
-      // --- STATISTIQUES ---
-      const AttendanceStats(),
+      _buildHistoriquePage(),
+      _buildProfilPage(),
     ];
   }
 
@@ -115,7 +195,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       padding: const EdgeInsets.all(16.0),
       child: Column(
         children: [
-          // Header avec actions - version responsive
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -132,16 +211,11 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final isSmallScreen = constraints.maxWidth < 400;
-
-                return isSmallScreen
-                    ? _buildMobileHeader()
-                    : _buildTabletHeader();
+                return isSmallScreen ? _buildMobileHeader() : _buildTabletHeader();
               },
             ),
           ),
           const SizedBox(height: 20),
-
-          // Liste des classes
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: getClassesStream(),
@@ -154,6 +228,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                   );
                 }
                 if (snapshot.hasError) {
+                  print('❌ Erreur chargement classes: ${snapshot.error}');
                   return Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -166,6 +241,14 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                             color: DashboardEnseignant.textColor,
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Vérifiez votre connexion',
+                          style: TextStyle(
+                            color: DashboardEnseignant.hintColor,
+                            fontSize: 12,
                           ),
                         ),
                       ],
@@ -226,7 +309,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
   Widget _buildMobileHeader() {
     return Column(
       children: [
-        // Première ligne : bouton suppression
         Row(
           children: [
             Container(
@@ -240,6 +322,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                 onPressed: () {
                   setState(() {
                     _isDeleteMode = !_isDeleteMode;
+                    _isEditMode = false;
                   });
                 },
                 icon: Icon(
@@ -250,12 +333,34 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
               ),
             ),
             const SizedBox(width: 12),
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: _isEditMode ? Colors.orange.withOpacity(0.1) : DashboardEnseignant.primaryColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: IconButton(
+                onPressed: () {
+                  setState(() {
+                    _isEditMode = !_isEditMode;
+                    _isDeleteMode = false;
+                  });
+                },
+                icon: Icon(
+                  _isEditMode ? Icons.close_rounded : Icons.edit_outlined,
+                  color: _isEditMode ? Colors.orange : DashboardEnseignant.primaryColor,
+                  size: 20,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Mode suppression',
+                    _isDeleteMode ? 'Mode suppression' : _isEditMode ? 'Mode modification' : 'Actions',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -263,7 +368,8 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                     ),
                   ),
                   Text(
-                    _isDeleteMode ? 'Appuyez sur ❌ pour supprimer' : 'Activez pour supprimer',
+                    _isDeleteMode ? 'Appuyez sur ❌ pour supprimer' :
+                    _isEditMode ? 'Appuyez sur ✏️ pour modifier' : 'Activez un mode',
                     style: TextStyle(
                       fontSize: 12,
                       color: DashboardEnseignant.hintColor,
@@ -275,7 +381,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
           ],
         ),
         const SizedBox(height: 12),
-        // Deuxième ligne : bouton créer
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
@@ -283,7 +388,10 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
               await Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => CreateClassPage(enseignantUid: widget.userUid),
+                  builder: (_) => CreateClassPage(
+                    enseignantUid: widget.userUid,
+                    userName: widget.userName,
+                  ),
                 ),
               );
             },
@@ -317,6 +425,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
             onPressed: () {
               setState(() {
                 _isDeleteMode = !_isDeleteMode;
+                _isEditMode = false;
               });
             },
             icon: Icon(
@@ -327,12 +436,34 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
           ),
         ),
         const SizedBox(width: 12),
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: _isEditMode ? Colors.orange.withOpacity(0.1) : DashboardEnseignant.primaryColor.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: IconButton(
+            onPressed: () {
+              setState(() {
+                _isEditMode = !_isEditMode;
+                _isDeleteMode = false;
+              });
+            },
+            icon: Icon(
+              _isEditMode ? Icons.close_rounded : Icons.edit_outlined,
+              color: _isEditMode ? Colors.orange : DashboardEnseignant.primaryColor,
+              size: 20,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Mode suppression',
+                _isDeleteMode ? 'Mode suppression' : _isEditMode ? 'Mode modification' : 'Actions',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
@@ -340,7 +471,8 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                 ),
               ),
               Text(
-                _isDeleteMode ? 'Appuyez sur ❌ pour supprimer' : 'Activez pour supprimer',
+                _isDeleteMode ? 'Appuyez sur ❌ pour supprimer' :
+                _isEditMode ? 'Appuyez sur ✏️ pour modifier' : 'Activez un mode',
                 style: TextStyle(
                   fontSize: 12,
                   color: DashboardEnseignant.hintColor,
@@ -349,7 +481,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
             ],
           ),
         ),
-        // Bouton créer une classe
         Container(
           height: 44,
           child: ElevatedButton.icon(
@@ -357,7 +488,10 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
               await Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => CreateClassPage(enseignantUid: widget.userUid),
+                  builder: (_) => CreateClassPage(
+                    enseignantUid: widget.userUid,
+                    userName: widget.userName,
+                  ),
                 ),
               );
             },
@@ -403,14 +537,112 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
               ),
               textAlign: TextAlign.center,
             ),
-
           ],
         ),
       ),
     );
   }
 
-  Widget _buildAttendancePage() {
+  Widget _buildHistoriquePage() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: getHistoryStream(),
+      builder: (context, snapshot) {
+        print('📊 État historique: ${snapshot.connectionState}');
+        print('📊 Données historique: ${snapshot.hasData}');
+        print('📊 Erreur historique: ${snapshot.error}');
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(
+                  color: DashboardEnseignant.primaryColor,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Chargement de l\'historique...',
+                  style: TextStyle(
+                    color: DashboardEnseignant.hintColor,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (snapshot.hasError) {
+          print('❌ Erreur détaillée historique: ${snapshot.error}');
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.error_outline_rounded, size: 64, color: Colors.red),
+                const SizedBox(height: 16),
+                Text(
+                  'Erreur de chargement',
+                  style: TextStyle(
+                    color: DashboardEnseignant.textColor,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Text(
+                    'Impossible de charger l\'historique. Vérifiez votre connexion Internet.',
+                    style: TextStyle(
+                      color: DashboardEnseignant.hintColor,
+                      fontSize: 14,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {});
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: DashboardEnseignant.primaryColor,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Text('Réessayer'),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return _buildEmptyHistory();
+        }
+
+        final historyItems = snapshot.data!.docs;
+        print('📊 Nombre d\'items historiques: ${historyItems.length}');
+
+        historyItems.sort((a, b) {
+          final dateA = (a.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+          final dateB = (b.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+          if (dateA == null || dateB == null) return 0;
+          return dateB.compareTo(dateA);
+        });
+
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: historyItems.length,
+          itemBuilder: (context, index) {
+            final item = historyItems[index].data() as Map<String, dynamic>;
+            print('📊 Item $index: ${item['className']}');
+            return _buildHistoryCard(item, historyItems[index].id);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyHistory() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -432,34 +664,33 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-
-
-                const SizedBox(height: 12),
+                Icon(Icons.history_rounded, size: 64, color: DashboardEnseignant.hintColor),
+                const SizedBox(height: 16),
                 Text(
-                  "En cours de developpement .",
-                  textAlign: TextAlign.center,
+                  'Aucun historique de présence',
                   style: TextStyle(
-                    color: DashboardEnseignant.hintColor,
-                    fontSize: 15,
-                    height: 1.5,
+                    color: DashboardEnseignant.textColor,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: () {
-                    setState(() {
-                      _selectedIndex = 0;
-                    });
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: DashboardEnseignant.primaryColor,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                const SizedBox(height: 8),
+                Text(
+                  'Les présences de vos séances apparaîtront ici automatiquement après chaque cours',
+                  style: TextStyle(
+                    color: DashboardEnseignant.hintColor,
+                    fontSize: 14,
                   ),
-                  child: const Text('Voir mes séances'),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Quand une séance se termine, les présences sont automatiquement sauvegardées ici.',
+                  style: TextStyle(
+                    color: DashboardEnseignant.hintColor,
+                    fontSize: 12,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
               ],
             ),
@@ -469,17 +700,251 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     );
   }
 
+  Widget _buildHistoryCard(Map<String, dynamic> data, String historyId) {
+    try {
+      Timestamp? dateTimestamp;
+
+      if (data['date'] != null) {
+        dateTimestamp = data['date'] as Timestamp;
+      } else if (data['createdAt'] != null) {
+        dateTimestamp = data['createdAt'] as Timestamp;
+      } else if (data['sessionDate'] != null) {
+        dateTimestamp = data['sessionDate'] as Timestamp;
+      }
+
+      final date = dateTimestamp?.toDate() ?? DateTime.now();
+      final presentCount = data['presentCount'] ?? 0;
+      final totalStudents = data['totalStudents'] ?? 0;
+      final percentage = totalStudents > 0 ? (presentCount / totalStudents * 100).round() : 0;
+
+      return Card(
+        margin: EdgeInsets.only(bottom: 12),
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ListTile(
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(Icons.history_rounded,
+                color: DashboardEnseignant.primaryColor),
+          ),
+          title: Text(
+            data['className'] ?? 'Séance sans nom',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${DateFormat('dd/MM/yyyy').format(date)} • ${data['startTime'] ?? ''}'),
+              Text(data['schoolClass'] ?? 'Classe non spécifiée'),
+              SizedBox(height: 4),
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: percentage >= 70 ? Colors.green.withOpacity(0.1) :
+                      percentage >= 50 ? Colors.orange.withOpacity(0.1) :
+                      Colors.red.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '$presentCount/$totalStudents présents ($percentage%)',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: percentage >= 70 ? Colors.green :
+                        percentage >= 50 ? Colors.orange :
+                        Colors.red,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          trailing: Icon(Icons.arrow_forward_ios_rounded, size: 16),
+          onTap: () => _openHistoryDetails(data, historyId),
+        ),
+      );
+    } catch (e) {
+      print('❌ Erreur affichage carte historique: $e');
+      return Card(
+        margin: EdgeInsets.only(bottom: 12),
+        child: ListTile(
+          leading: Icon(Icons.error_outline_rounded, color: Colors.red),
+          title: Text('Erreur d\'affichage'),
+          subtitle: Text('Données corrompues'),
+        ),
+      );
+    }
+  }
+
+  Widget _buildProfilPage() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: DashboardEnseignant.surfaceColor,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.person_outline_rounded,
+                    size: 40,
+                    color: DashboardEnseignant.primaryColor,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  widget.userName,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: DashboardEnseignant.textColor,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Enseignant",
+                  style: TextStyle(
+                    color: DashboardEnseignant.hintColor,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Divider(color: Colors.grey.shade300),
+                const SizedBox(height: 20),
+                _buildProfileInfoItem(
+                    Icons.email_outlined,
+                    "Email",
+                    _userEmail ?? "Chargement..."
+                ),
+                const SizedBox(height: 16),
+                _buildProfileInfoItem(Icons.phone_outlined, "Téléphone", "+33 1 23 45 67 89"),
+                const SizedBox(height: 16),
+                _buildProfileInfoItem(Icons.school_outlined, "Matières", "Mathématiques, Physique"),
+                const SizedBox(height: 30),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {},
+                    icon: Icon(Icons.edit_outlined, size: 18),
+                    label: Text('Modifier le profil'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: DashboardEnseignant.primaryColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.pushReplacementNamed(context, 'login'),
+                    icon: Icon(Icons.logout_outlined, size: 18),
+                    label: Text('Déconnexion'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red,
+                      side: BorderSide(color: Colors.red),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileInfoItem(IconData icon, String title, String value) {
+    return Row(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: DashboardEnseignant.primaryColor,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: DashboardEnseignant.hintColor,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: DashboardEnseignant.textColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   int _getCrossAxisCount(double screenWidth) {
-    if (screenWidth < 400) return 1; // Mobile très petit
-    if (screenWidth < 600) return 2; // Mobile moyen
-    if (screenWidth < 900) return 3; // Tablet
-    return 4; // Desktop
+    if (screenWidth < 400) return 1;
+    if (screenWidth < 600) return 2;
+    if (screenWidth < 900) return 3;
+    return 4;
   }
 
   double _getChildAspectRatio(double screenWidth) {
-    if (screenWidth < 400) return 1.7; // Plus large sur petits écrans
+    if (screenWidth < 400) return 1.7;
     if (screenWidth < 600) return 1.2;
-    return 1.1; // Ratio normal pour grands écrans
+    return 1.1;
   }
 
   Widget _buildClassCard({
@@ -496,7 +961,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
 
         return Stack(
           children: [
-            // Carte principale
             Material(
               color: DashboardEnseignant.surfaceColor,
               borderRadius: BorderRadius.circular(16),
@@ -512,6 +976,8 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                     'nombreEtudiants': studentCount,
                     'iconIndex': data['iconIndex'],
                     'schoolClass': schoolClassName,
+                    'dateDebut': data['dateDebut'],
+                    'dateFin': data['dateFin'],
                   },
                 ),
                 borderRadius: BorderRadius.circular(16),
@@ -527,7 +993,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Header avec icône et nombre d'étudiants
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -573,8 +1038,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                         ],
                       ),
                       SizedBox(height: isSmallCard ? 8 : 12),
-
-                      // Nom de la séance
                       Text(
                         (data['nom'] as String?) ?? 'Sans nom',
                         style: TextStyle(
@@ -587,8 +1050,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       SizedBox(height: isSmallCard ? 6 : 8),
-
-                      // Classe school
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                         decoration: BoxDecoration(
@@ -620,8 +1081,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                         ),
                       ),
                       SizedBox(height: isSmallCard ? 6 : 8),
-
-                      // Date et horaire
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -668,10 +1127,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                           ],
                         ],
                       ),
-
                       const Spacer(),
-
-                      // Footer avec indication de navigation
                       Container(
                         height: 1,
                         color: Colors.grey.shade200,
@@ -699,8 +1155,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                 ),
               ),
             ),
-
-            // Bouton de suppression
             if (_isDeleteMode)
               Positioned(
                 top: 6,
@@ -746,7 +1200,11 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                       ),
                     );
                     if (confirm == true) {
+                      setState(() {
+                        _isDeleteMode = false;
+                      });
                       await deleteClass(classId);
+
                     }
                   },
                   child: Container(
@@ -758,6 +1216,27 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                     ),
                     child: const Icon(
                       Icons.close_rounded,
+                      color: Colors.white,
+                      size: 12,
+                    ),
+                  ),
+                ),
+              ),
+            if (_isEditMode)
+              Positioned(
+                top: 6,
+                right: 6,
+                child: GestureDetector(
+                  onTap: () => editClass(classId, data),
+                  child: Container(
+                    width: 20,
+                    height: 20,
+                    decoration: const BoxDecoration(
+                      color: Colors.orange,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.edit_rounded,
                       color: Colors.white,
                       size: 12,
                     ),
@@ -917,9 +1396,9 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                           ? DashboardEnseignant.primaryColor.withOpacity(0.1)
                           : Colors.transparent,
                     ),
-                    child: const Icon(Icons.qr_code_scanner),
+                    child: const Icon(Icons.history_outlined),
                   ),
-                  label: 'Présence',
+                  label: 'Historique',
                 ),
                 BottomNavigationBarItem(
                   icon: Container(
@@ -930,13 +1409,860 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                           ? DashboardEnseignant.primaryColor.withOpacity(0.1)
                           : Colors.transparent,
                     ),
-                    child: const Icon(Icons.bar_chart),
+                    child: const Icon(Icons.person_outline_rounded),
                   ),
-                  label: 'Statistiques',
+                  label: 'Profil',
                 ),
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class SchoolClassSelection {
+  final String id;
+  final String name;
+  final List<String> studentUids;
+  bool isSelected;
+
+  SchoolClassSelection({
+    required this.id,
+    required this.name,
+    required this.studentUids,
+    this.isSelected = false,
+  });
+}
+
+class EditClassDialog extends StatefulWidget {
+  final String classId;
+  final Map<String, dynamic> initialData;
+  final String enseignantUid;
+  final String userName;
+
+  const EditClassDialog({
+    Key? key,
+    required this.classId,
+    required this.initialData,
+    required this.enseignantUid,
+    required this.userName,
+  }) : super(key: key);
+
+  @override
+  State<EditClassDialog> createState() => _EditClassDialogState();
+}
+
+class _EditClassDialogState extends State<EditClassDialog> {
+  final TextEditingController _jourCtrl = TextEditingController();
+  final TextEditingController _heureDebutCtrl = TextEditingController();
+  final TextEditingController _heureFinCtrl = TextEditingController();
+
+  DateTime? _selectedDate;
+  TimeOfDay? _selectedStartTime;
+  TimeOfDay? _selectedEndTime;
+  bool _isSaving = false;
+  bool _isLoadingClasses = true;
+  String searchClassQuery = '';
+
+  List<SchoolClassSelection> allSchoolClasses = [];
+  SchoolClassSelection? _selectedClass;
+  StreamSubscription<QuerySnapshot>? _classesSubscription;
+
+  final Color _primaryColor = const Color(0xFF6366F1);
+  final Color _backgroundColor = const Color(0xFFF8FAFD);
+  final Color _surfaceColor = Colors.white;
+  final Color _textColor = const Color(0xFF2D3748);
+  final Color _hintColor = const Color(0xFF718096);
+  final Color _borderColor = const Color(0xFFE2E8F0);
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeData();
+    _fetchSchoolClasses();
+    _setupRealtimeListener();
+  }
+
+  @override
+  void dispose() {
+    _classesSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _initializeData() {
+    if (widget.initialData['dateDebut'] != null) {
+      final dateDebut = (widget.initialData['dateDebut'] as Timestamp).toDate();
+      _selectedDate = dateDebut;
+      _jourCtrl.text = DateFormat('dd/MM/yyyy').format(dateDebut);
+    } else if (widget.initialData['jour'] != null) {
+      try {
+        _selectedDate = DateFormat('dd/MM/yyyy').parse(widget.initialData['jour']);
+        _jourCtrl.text = widget.initialData['jour'];
+      } catch (e) {
+        print('Erreur parsing date: $e');
+        _selectedDate = DateTime.now();
+        _jourCtrl.text = DateFormat('dd/MM/yyyy').format(DateTime.now());
+      }
+    } else {
+      _selectedDate = DateTime.now();
+      _jourCtrl.text = DateFormat('dd/MM/yyyy').format(DateTime.now());
+    }
+
+    if (widget.initialData['horaireDebut'] != null) {
+      _heureDebutCtrl.text = widget.initialData['horaireDebut'];
+      try {
+        final parts = widget.initialData['horaireDebut'].split(':');
+        if (parts.length == 2) {
+          _selectedStartTime = TimeOfDay(
+            hour: int.parse(parts[0]),
+            minute: int.parse(parts[1]),
+          );
+        }
+      } catch (e) {
+        print('Erreur parsing heure début: $e');
+      }
+    }
+
+    if (widget.initialData['horaireFin'] != null) {
+      _heureFinCtrl.text = widget.initialData['horaireFin'];
+      try {
+        final parts = widget.initialData['horaireFin'].split(':');
+        if (parts.length == 2) {
+          _selectedEndTime = TimeOfDay(
+            hour: int.parse(parts[0]),
+            minute: int.parse(parts[1]),
+          );
+        }
+      } catch (e) {
+        print('Erreur parsing heure fin: $e');
+      }
+    }
+  }
+
+  void _setupRealtimeListener() {
+    _classesSubscription = FirebaseFirestore.instance
+        .collection('school_classes')
+        .snapshots()
+        .listen((snapshot) {
+      _updateClassesFromSnapshot(snapshot);
+    });
+  }
+
+  void _updateClassesFromSnapshot(QuerySnapshot snapshot) {
+    final updatedClasses = <SchoolClassSelection>[];
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final className = data['name'] ?? 'Classe sans nom';
+
+      List<String> studentUids = [];
+      if (data['students'] != null && data['students'] is List) {
+        studentUids = List<String>.from(data['students']);
+      } else if (data['studentUids'] != null && data['studentUids'] is List) {
+        studentUids = List<String>.from(data['studentUids']);
+      }
+
+      final isCurrentlySelected = widget.initialData['schoolClassId'] == doc.id;
+
+      updatedClasses.add(SchoolClassSelection(
+        id: doc.id,
+        name: className,
+        studentUids: studentUids,
+        isSelected: isCurrentlySelected,
+      ));
+
+      if (isCurrentlySelected && _selectedClass == null) {
+        _selectedClass = updatedClasses.last;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        allSchoolClasses = updatedClasses;
+        _isLoadingClasses = false;
+      });
+    }
+  }
+
+  Future<void> _fetchSchoolClasses() async {
+    try {
+      setState(() {
+        _isLoadingClasses = true;
+      });
+
+      final snapshot = await FirebaseFirestore.instance
+          .collection('school_classes')
+          .orderBy('name')
+          .get();
+
+      _updateClassesFromSnapshot(snapshot);
+
+    } catch (e) {
+      print('Erreur initiale: $e');
+      if (mounted) {
+        setState(() => _isLoadingClasses = false);
+      }
+    }
+  }
+
+  List<SchoolClassSelection> get filteredClasses {
+    if (searchClassQuery.isEmpty) return allSchoolClasses;
+    final query = searchClassQuery.toLowerCase();
+    return allSchoolClasses
+        .where((c) => c.name.toLowerCase().contains(query))
+        .toList();
+  }
+
+  Future<void> _selectDay() async {
+    final pickedDate = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate ?? DateTime.now(),
+      firstDate: DateTime(2024),
+      lastDate: DateTime(2100),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: _primaryColor,
+              onPrimary: Colors.white,
+              surface: _surfaceColor,
+              onSurface: _textColor,
+            ),
+            dialogBackgroundColor: _surfaceColor,
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (pickedDate == null) return;
+
+    setState(() {
+      _selectedDate = pickedDate;
+      _jourCtrl.text = DateFormat('dd/MM/yyyy').format(pickedDate);
+    });
+  }
+
+  Future<void> _selectStartTime() async {
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: _selectedStartTime ?? TimeOfDay.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: _primaryColor,
+              onPrimary: Colors.white,
+              surface: _surfaceColor,
+              onSurface: _textColor,
+            ),
+            dialogBackgroundColor: _surfaceColor,
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (pickedTime == null) return;
+    setState(() {
+      _selectedStartTime = pickedTime;
+      _heureDebutCtrl.text = pickedTime.format(context);
+    });
+  }
+
+  Future<void> _selectEndTime() async {
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: _selectedEndTime ?? TimeOfDay.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: _primaryColor,
+              onPrimary: Colors.white,
+              surface: _surfaceColor,
+              onSurface: _textColor,
+            ),
+            dialogBackgroundColor: _surfaceColor,
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (pickedTime == null) return;
+
+    setState(() {
+      _selectedEndTime = pickedTime;
+      _heureFinCtrl.text = pickedTime.format(context);
+    });
+  }
+
+  Widget _buildClassCard(SchoolClassSelection schoolClass) {
+    final isSelected = _selectedClass?.id == schoolClass.id;
+    final hasStudents = schoolClass.studentUids.isNotEmpty;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: isSelected ? _primaryColor.withOpacity(0.05) : _surfaceColor,
+        borderRadius: BorderRadius.circular(10),
+        elevation: 0,
+        child: InkWell(
+          onTap: () => _selectClass(schoolClass),
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: isSelected ? _primaryColor : _borderColor,
+                width: isSelected ? 2 : 1,
+              ),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: isSelected ? _primaryColor.withOpacity(0.1) : _backgroundColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.groups_rounded,
+                    color: isSelected ? _primaryColor : _hintColor,
+                    size: 16,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        schoolClass.name,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isSelected ? _primaryColor : _textColor,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${schoolClass.studentUids.length} étudiant${schoolClass.studentUids.length > 1 ? 's' : ''}',
+                        style: TextStyle(
+                          color: isSelected ? _primaryColor.withOpacity(0.8) : _hintColor,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: hasStudents ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    hasStudents ? 'Actif' : 'Vide',
+                    style: TextStyle(
+                      color: hasStudents ? Colors.green : Colors.red,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _selectClass(SchoolClassSelection selectedClass) {
+    setState(() {
+      if (_selectedClass?.id == selectedClass.id) {
+        _selectedClass = null;
+        selectedClass.isSelected = false;
+      } else {
+        if (_selectedClass != null) {
+          _selectedClass!.isSelected = false;
+        }
+        _selectedClass = selectedClass;
+        selectedClass.isSelected = true;
+      }
+    });
+  }
+
+  Future<void> _saveChanges() async {
+    if (_selectedDate == null) {
+      _showSnackBar('Veuillez sélectionner une date');
+      return;
+    }
+
+    if (_heureDebutCtrl.text.isEmpty || _heureFinCtrl.text.isEmpty) {
+      _showSnackBar('Veuillez sélectionner les horaires de début et de fin');
+      return;
+    }
+
+    if (_selectedClass == null) {
+      _showSnackBar('Veuillez sélectionner une classe');
+      return;
+    }
+
+    setState(() => _isSaving = true);
+
+    try {
+      // CRÉATION DES DATES COMPLÈTES POUR L'HORAIRE
+      final dateDebut = DateTime(
+        _selectedDate!.year,
+        _selectedDate!.month,
+        _selectedDate!.day,
+        _selectedStartTime!.hour,
+        _selectedStartTime!.minute,
+      );
+
+      final dateFin = DateTime(
+        _selectedDate!.year,
+        _selectedDate!.month,
+        _selectedDate!.day,
+        _selectedEndTime!.hour,
+        _selectedEndTime!.minute,
+      );
+
+      final updateData = <String, dynamic>{
+        'updatedAt': FieldValue.serverTimestamp(),
+        'enseignantName': widget.userName,
+        'jour': DateFormat('dd/MM/yyyy').format(_selectedDate!),
+        'dateDebut': Timestamp.fromDate(dateDebut),
+        'dateFin': Timestamp.fromDate(dateFin),
+        'horaireDebut': _heureDebutCtrl.text,
+        'horaireFin': _heureFinCtrl.text,
+      };
+
+      if (_selectedClass!.id != widget.initialData['schoolClassId']) {
+        updateData['schoolClass'] = _selectedClass!.name;
+        updateData['schoolClassId'] = _selectedClass!.id;
+        updateData['studentsUid'] = _selectedClass!.studentUids;
+        updateData['nombreEtudiants'] = _selectedClass!.studentUids.length;
+      }
+
+      await FirebaseFirestore.instance
+          .collection('classes')
+          .doc(widget.classId)
+          .update(updateData);
+
+      setState(() => _isSaving = false);
+
+      if (mounted) {
+        Navigator.pop(context, true);
+      }
+    } catch (e) {
+      setState(() => _isSaving = false);
+      _showSnackBar('Erreur lors de la modification: $e');
+    }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: _primaryColor,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+
+    return Dialog(
+      backgroundColor: _surfaceColor,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.all(16),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: screenHeight * 0.85,
+          maxWidth: 500,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: _surfaceColor,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                ),
+                border: Border(
+                  bottom: BorderSide(color: _borderColor, width: 1),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: _primaryColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.edit_rounded, color: _primaryColor, size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Modifier la séance',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: _textColor,
+                          ),
+                        ),
+                        Text(
+                          'Ajustez la date, l\'horaire et la classe',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _hintColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Date et Horaire',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: _textColor,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        TextFormField(
+                          controller: _jourCtrl,
+                          readOnly: true,
+                          style: TextStyle(color: _textColor, fontSize: 14),
+                          decoration: InputDecoration(
+                            labelText: 'Date de la séance',
+                            labelStyle: TextStyle(color: _hintColor, fontSize: 13),
+                            filled: true,
+                            fillColor: _backgroundColor,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide.none,
+                            ),
+                            suffixIcon: Icon(Icons.calendar_today, color: _primaryColor, size: 18),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                          ),
+                          onTap: _selectDay,
+                        ),
+                        const SizedBox(height: 16),
+
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: _heureDebutCtrl,
+                                readOnly: true,
+                                style: TextStyle(color: _textColor, fontSize: 14),
+                                decoration: InputDecoration(
+                                  labelText: 'Heure de début',
+                                  labelStyle: TextStyle(color: _hintColor, fontSize: 13),
+                                  filled: true,
+                                  fillColor: _backgroundColor,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  suffixIcon: Icon(Icons.access_time, color: _primaryColor, size: 18),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                ),
+                                onTap: _selectStartTime,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: TextFormField(
+                                controller: _heureFinCtrl,
+                                readOnly: true,
+                                style: TextStyle(color: _textColor, fontSize: 14),
+                                decoration: InputDecoration(
+                                  labelText: 'Heure de fin',
+                                  labelStyle: TextStyle(color: _hintColor, fontSize: 13),
+                                  filled: true,
+                                  fillColor: _backgroundColor,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  suffixIcon: Icon(Icons.access_time, color: _primaryColor, size: 18),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                ),
+                                onTap: _selectEndTime,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                'Sélectionnez une classe',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: _textColor,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: _primaryColor.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.autorenew_rounded, size: 12, color: _primaryColor),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Temps réel',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: _primaryColor,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+
+                          if (_selectedClass != null)
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: _surfaceColor,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: _primaryColor, width: 1.5),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.check_circle_rounded, color: _primaryColor, size: 16),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _selectedClass!.name,
+                                          style: TextStyle(
+                                            color: _primaryColor,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        Text(
+                                          '${_selectedClass!.studentUids.length} étudiant${_selectedClass!.studentUids.length > 1 ? 's' : ''}',
+                                          style: TextStyle(
+                                            color: _primaryColor.withOpacity(0.8),
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: Icon(Icons.close_rounded, color: _primaryColor, size: 16),
+                                    onPressed: () => setState(() => _selectedClass = null),
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 32,
+                                      minHeight: 32,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+
+                          TextFormField(
+                            decoration: InputDecoration(
+                              labelText: 'Rechercher une classe...',
+                              labelStyle: TextStyle(color: _hintColor, fontSize: 13),
+                              filled: true,
+                              fillColor: _backgroundColor,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide.none,
+                              ),
+                              prefixIcon: Icon(Icons.search_rounded, color: _primaryColor, size: 18),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            ),
+                            onChanged: (v) => setState(() => searchClassQuery = v),
+                          ),
+                          const SizedBox(height: 12),
+
+                          Expanded(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: _backgroundColor,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: _borderColor, width: 1),
+                              ),
+                              child: _isLoadingClasses
+                                  ? Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: _primaryColor,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      'Chargement des classes...',
+                                      style: TextStyle(color: _hintColor, fontSize: 12),
+                                    ),
+                                  ],
+                                ),
+                              )
+                                  : filteredClasses.isEmpty
+                                  ? Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.search_off_rounded, size: 40, color: _hintColor),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Aucune classe trouvée',
+                                      style: TextStyle(color: _hintColor, fontSize: 12),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Vérifiez votre recherche',
+                                      style: TextStyle(color: _hintColor, fontSize: 10),
+                                    ),
+                                  ],
+                                ),
+                              )
+                                  : ListView.builder(
+                                padding: const EdgeInsets.all(8),
+                                itemCount: filteredClasses.length,
+                                itemBuilder: (context, index) {
+                                  return _buildClassCard(filteredClasses[index]);
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: _surfaceColor,
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
+                ),
+                border: Border(
+                  top: BorderSide(color: _borderColor, width: 1),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _isSaving ? null : () => Navigator.pop(context, false),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _primaryColor,
+                        side: BorderSide(color: _primaryColor),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      child: const Text('Annuler'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _isSaving ? null : _saveChanges,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primaryColor,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      child: _isSaving
+                          ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                          : const Text('Enregistrer'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

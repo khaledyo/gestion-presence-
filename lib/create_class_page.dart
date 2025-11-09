@@ -20,7 +20,13 @@ class SchoolClassSelection {
 
 class CreateClassPage extends StatefulWidget {
   final String enseignantUid;
-  const CreateClassPage({super.key, required this.enseignantUid});
+  final String userName; // AJOUT: Paramètre userName
+
+  const CreateClassPage({
+    super.key,
+    required this.enseignantUid,
+    required this.userName, // AJOUT: Paramètre userName
+  });
 
   @override
   State<CreateClassPage> createState() => _CreateClassPageState();
@@ -397,6 +403,7 @@ class _CreateClassPageState extends State<CreateClassPage> {
         dateFin,
       );
 
+      // CORRECTION: Ajouter le nom de l'enseignant dans les données sauvegardées
       await FirebaseFirestore.instance.collection('classes').add({
         'nom': _nomCtrl.text.trim(),
         'jour': DateFormat('dd/MM/yyyy').format(_selectedDate!),
@@ -407,6 +414,7 @@ class _CreateClassPageState extends State<CreateClassPage> {
         'nombreEtudiants': _selectedClass!.studentUids.length,
         'iconIndex': _selectedIconIndex,
         'enseignantUid': widget.enseignantUid,
+        'enseignantName': widget.userName, // AJOUT: Nom de l'enseignant
         'studentsUid': _selectedClass!.studentUids,
         'schoolClass': _selectedClass!.name,
         'schoolClassId': _selectedClass!.id,

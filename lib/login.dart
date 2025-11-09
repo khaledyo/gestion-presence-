@@ -4,7 +4,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 // 🔸 Tes autres pages
 import 'admin_home_page.dart';
-
 import 'dashboard_etudiant.dart';
 import 'dashboard_enseignant.dart';
 
@@ -52,6 +51,7 @@ class _MyLoginState extends State<MyLogin> {
       }
 
       final userName = userDoc['nom'] ?? 'Utilisateur';
+      final userEmail = userDoc['email'] ?? _emailController.text.trim(); // AJOUT: Récupération de l'email
       final role = userDoc['role']?.toString().toLowerCase() ?? 'étudiant';
 
       // ✅ Redirection selon le rôle
@@ -72,6 +72,7 @@ class _MyLoginState extends State<MyLogin> {
             builder: (_) => DashboardEnseignant(
               userName: userName,
               userUid: uid,
+              userEmail: userEmail, // AJOUT: Paramètre userEmail
             ),
           ),
         );

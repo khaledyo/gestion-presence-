@@ -1,7 +1,7 @@
-// lib/pages/student/dashboard_etudiant.dart
+// lib/pages/dashboard_etudiant.dart
 import 'package:flutter/material.dart';
-
 import 'classes_list_page.dart';
+import 'student_history_page.dart'; // Import ajouté
 
 class DashboardEtudiant extends StatelessWidget {
   final String userName;
@@ -38,7 +38,7 @@ class DashboardEtudiant extends StatelessWidget {
                     _buildWelcomeSection(),
                     const SizedBox(height: 32),
                     _buildActionsGrid(context),
-                    const SizedBox(height: 20), // Espace supplémentaire en bas
+                    const SizedBox(height: 20),
                   ],
                 ),
               ),
@@ -165,14 +165,14 @@ class DashboardEtudiant extends StatelessWidget {
 
   Widget _buildActionsGrid(BuildContext context) {
     return GridView(
-      shrinkWrap: true, // Important pour éviter le débordement
-      physics: const NeverScrollableScrollPhysics(), // Désactive le scroll individuel
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 20),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
-        childAspectRatio: 0.85,
+        childAspectRatio: 0.7,
       ),
       children: [
         _buildActionCard(
@@ -195,8 +195,15 @@ class DashboardEtudiant extends StatelessWidget {
           subtitle: "Consulter mes absences",
           color: successColor,
           onTap: () {
-            // Navigation vers l'historique
-            _showComingSoonSnackbar(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => StudentHistoryPage(
+                  userUid: userUid,
+                  userName: userName,
+                ),
+              ),
+            );
           },
         ),
       ],
