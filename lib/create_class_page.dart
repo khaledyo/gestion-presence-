@@ -20,12 +20,12 @@ class SchoolClassSelection {
 
 class CreateClassPage extends StatefulWidget {
   final String enseignantUid;
-  final String userName; // AJOUT: Paramètre userName
+  final String userName;
 
   const CreateClassPage({
     super.key,
     required this.enseignantUid,
-    required this.userName, // AJOUT: Paramètre userName
+    required this.userName,
   });
 
   @override
@@ -93,7 +93,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
     super.dispose();
   }
 
-  // 🔥 NOUVEAU : Écoute en temps réel des changements
   void _setupRealtimeListener() {
     _classesSubscription = FirebaseFirestore.instance
         .collection('school_classes')
@@ -103,7 +102,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
     });
   }
 
-  // 🔥 NOUVEAU : Mettre à jour les classes automatiquement
   void _updateClassesFromSnapshot(QuerySnapshot snapshot) {
     final updatedClasses = <SchoolClassSelection>[];
 
@@ -111,7 +109,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
       final data = doc.data() as Map<String, dynamic>;
       final className = data['name'] ?? 'Classe sans nom';
 
-      // Récupérer les étudiants depuis school_classes en temps réel
       List<String> studentUids = [];
       if (data['students'] != null && data['students'] is List) {
         studentUids = List<String>.from(data['students']);
@@ -119,7 +116,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
         studentUids = List<String>.from(data['studentUids']);
       }
 
-      // Conserver l'état de sélection
       final wasSelected = allSchoolClasses
           .firstWhere((c) => c.id == doc.id,
           orElse: () => SchoolClassSelection(id: '', name: '', studentUids: []))
@@ -136,7 +132,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
     if (mounted) {
       setState(() {
         allSchoolClasses = updatedClasses;
-        // Mettre à jour _selectedClass si nécessaire
         if (_selectedClass != null) {
           _selectedClass = updatedClasses.firstWhere(
                 (c) => c.id == _selectedClass!.id,
@@ -169,39 +164,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
     }
   }
 
-  Future<List<String>> _getStudentsForClass(String classId) async {
-    try {
-      final classDoc = await FirebaseFirestore.instance
-          .collection('school_classes')
-          .doc(classId)
-          .get();
-
-      final data = classDoc.data() ?? {};
-
-      if (data['students'] != null && data['students'] is List) {
-        return List<String>.from(data['students']);
-      }
-      if (data['studentUids'] != null && data['studentUids'] is List) {
-        return List<String>.from(data['studentUids']);
-      }
-      if (data['etudiants'] != null && data['etudiants'] is List) {
-        return List<String>.from(data['etudiants']);
-      }
-
-      final studentsSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .where('role', isEqualTo: 'Étudiant')
-          .where('classId', isEqualTo: classId)
-          .get();
-
-      return studentsSnapshot.docs.map((doc) => doc.id).toList();
-
-    } catch (e) {
-      print('Erreur chargement étudiants pour classe $classId: $e');
-      return [];
-    }
-  }
-
   String _generateSessionCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final random = Random();
@@ -209,8 +171,27 @@ class _CreateClassPageState extends State<CreateClassPage> {
         6, (_) => chars.codeUnitAt(random.nextInt(chars.length))));
   }
 
+  // CORRECTION : Session de 15 minutes exactement
   Future<String> _generateInitialAttendanceSession(String classId, String className, DateTime dateDebut, DateTime dateFin) async {
+    final now = DateTime.now();
+
+    // VÉRIFIER SI ON EST DANS LES HORAIRES DU COURS
+    final isDuringClass = now.isAfter(dateDebut) && now.isBefore(dateFin);
+
+    if (!isDuringClass) {
+      print('🕒 Hors horaire cours - Pas de session créée');
+      return ""; // Retourner une chaîne vide si hors horaire
+    }
+
+    // CRÉER LA SESSION UNIQUEMENT SI DANS LES HORAIRES
     final sessionId = "${classId}_${DateTime.now().millisecondsSinceEpoch}";
+
+    // CORRECTION : Toujours 15 minutes exactement
+    final sessionEnd = now.add(Duration(minutes: 15));
+
+    print('🕒 Création session depuis create_class: ${DateFormat('HH:mm').format(now)}');
+    print('⏰ Expiration session: ${DateFormat('HH:mm').format(sessionEnd)}');
+    print('⏱️ Durée totale: 15 minutes');
 
     await FirebaseFirestore.instance
         .collection('attendances')
@@ -221,11 +202,11 @@ class _CreateClassPageState extends State<CreateClassPage> {
       'createdAt': Timestamp.now(),
       'dateDebut': Timestamp.fromDate(dateDebut),
       'dateFin': Timestamp.fromDate(dateFin),
-      'expiresAt': Timestamp.fromDate(dateFin),
+      'expiresAt': Timestamp.fromDate(sessionEnd), // ← CORRIGÉ : 15 minutes
       'presentStudentsUid': [],
       'isClosed': false,
       'sessionCode': _generateSessionCode(),
-      'autoCloseScheduled': true,
+      'sessionDuration': 15, // Durée fixe de 15 minutes
     });
 
     return sessionId;
@@ -395,7 +376,7 @@ class _CreateClassPageState extends State<CreateClassPage> {
     );
 
     try {
-      // Générer la session de présence
+      // CORRECTION : Générer la session UNIQUEMENT si dans les horaires
       final sessionId = await _generateInitialAttendanceSession(
         _selectedClass!.id,
         _nomCtrl.text.trim(),
@@ -403,8 +384,7 @@ class _CreateClassPageState extends State<CreateClassPage> {
         dateFin,
       );
 
-      // CORRECTION: Ajouter le nom de l'enseignant dans les données sauvegardées
-      await FirebaseFirestore.instance.collection('classes').add({
+      final classData = {
         'nom': _nomCtrl.text.trim(),
         'jour': DateFormat('dd/MM/yyyy').format(_selectedDate!),
         'dateDebut': Timestamp.fromDate(dateDebut),
@@ -414,17 +394,30 @@ class _CreateClassPageState extends State<CreateClassPage> {
         'nombreEtudiants': _selectedClass!.studentUids.length,
         'iconIndex': _selectedIconIndex,
         'enseignantUid': widget.enseignantUid,
-        'enseignantName': widget.userName, // AJOUT: Nom de l'enseignant
+        'enseignantName': widget.userName,
         'studentsUid': _selectedClass!.studentUids,
         'schoolClass': _selectedClass!.name,
         'schoolClassId': _selectedClass!.id,
-        'attendanceSessionId': sessionId,
         'createdAt': FieldValue.serverTimestamp(),
-      });
+      };
+
+      // Ajouter l'ID de session seulement si créé
+      if (sessionId.isNotEmpty) {
+        classData['attendanceSessionId'] = sessionId;
+      }
+
+      await FirebaseFirestore.instance.collection('classes').add(classData);
 
       setState(() => _isSaving = false);
       if (mounted) {
-        _showSnackBar('Séance créée avec succès 🎉');
+        final now = DateTime.now();
+        final isDuringClass = now.isAfter(dateDebut) && now.isBefore(dateFin);
+
+        if (isDuringClass) {
+          _showSnackBar('Séance créée avec succès 🎉 - QR Code activé');
+        } else {
+          _showSnackBar('Séance créée avec succès 🎉 - QR Code activera à l\'heure du cours');
+        }
         Navigator.pop(context);
       }
     } catch (e) {
@@ -432,7 +425,7 @@ class _CreateClassPageState extends State<CreateClassPage> {
       _showSnackBar('Erreur lors de la création: $e');
     }
   }
-
+  // ... (le reste du code reste identique - _buildIconPicker, _buildClassCard, build, etc.)
   Widget _buildIconPicker() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -733,7 +726,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Header avec indication de rafraîchissement automatique
                         Row(
                           children: [
                             Expanded(
@@ -746,7 +738,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
                                 ),
                               ),
                             ),
-                            // Indicateur de rafraîchissement automatique
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(

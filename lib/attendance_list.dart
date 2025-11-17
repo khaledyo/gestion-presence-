@@ -21,6 +21,7 @@ enum SessionStatus {
   beforeClass,
   duringClass,
   afterClass,
+  qrCodeActive,
 }
 
 class Student {
@@ -59,6 +60,8 @@ class _AttendanceListState extends State<AttendanceList> {
   Timer? _sessionTimer;
   int _remainingTime = 0;
   SessionStatus _sessionStatus = SessionStatus.loading;
+  bool _canStartQRSession = false;
+  bool _hasSessionHappenedInThisTimeSlot = false; // NOUVEAU: Stocker l'état local par créneau
 
   // Durée de validité du QR code fixée à 15 minutes
   final int _qrCodeDuration = 15 * 60; // 15 minutes en secondes
@@ -84,6 +87,9 @@ class _AttendanceListState extends State<AttendanceList> {
 
       // Charger les étudiants en premier
       await _loadStudents();
+
+      // Vérifier si une session a déjà eu lieu dans ce créneau horaire
+      _hasSessionHappenedInThisTimeSlot = await _hasSessionAlreadyHappenedInThisTimeSlot();
 
       // Vérifier l'horaire du cours et l'état de la session
       await _checkClassScheduleAndSession();
@@ -131,14 +137,16 @@ class _AttendanceListState extends State<AttendanceList> {
           // Session active trouvée - la réutiliser
           sessionId = existingSessionId;
           _remainingTime = expiresAt.difference(now).inSeconds;
-          _sessionStatus = SessionStatus.duringClass;
+          _sessionStatus = SessionStatus.qrCodeActive;
           _startSessionTimer();
 
           // Charger les présences existantes
           _loadExistingAttendance(sessionData);
 
+          // DÉSACTIVER LE BOUTON POUR DÉMARRER UN NOUVEAU QR
           setState(() {
             isLoading = false;
+            _canStartQRSession = false;
           });
           return;
         } else if (!isClosed && expiresAt != null && now.isAfter(expiresAt)) {
@@ -148,7 +156,7 @@ class _AttendanceListState extends State<AttendanceList> {
       }
     }
 
-    // Vérifier l'horaire du cours pour créer une nouvelle session si nécessaire
+    // Vérifier l'horaire du cours pour déterminer l'état
     await _checkClassTiming(classData);
   }
 
@@ -162,6 +170,56 @@ class _AttendanceListState extends State<AttendanceList> {
     }
 
     setState(() {});
+  }
+
+  Future<bool> _hasSessionAlreadyHappenedInThisTimeSlot() async {
+    try {
+      final classDoc = await FirebaseFirestore.instance
+          .collection('classes')
+          .doc(widget.classId)
+          .get();
+
+      if (!classDoc.exists) return false;
+
+      final classData = classDoc.data()!;
+
+      // Vérifier si une session a déjà été complétée pour ce créneau horaire
+      final sessionCompletedForTimeSlot = classData['sessionCompletedForTimeSlot'] ?? false;
+      if (sessionCompletedForTimeSlot) {
+        // Vérifier si c'est le même créneau horaire
+        final lastSessionHoraire = classData['lastSessionHoraire'] as String?;
+        final currentHoraire = widget.classData['horaireDebut'] as String?;
+
+        if (lastSessionHoraire == currentHoraire) {
+          return true; // Même créneau horaire, session déjà faite
+        }
+      }
+
+      // Vérifier la date de la dernière session et l'horaire
+      final lastSessionDate = classData['lastSessionDate'] as Timestamp?;
+      final lastSessionHoraire = classData['lastSessionHoraire'] as String?;
+      final currentHoraire = widget.classData['horaireDebut'] as String?;
+
+      if (lastSessionDate != null && lastSessionHoraire != null && currentHoraire != null) {
+        final lastSession = lastSessionDate.toDate();
+        final today = DateTime.now();
+
+        // Comparer les dates (jour/mois/année seulement)
+        final isSameDay = lastSession.year == today.year &&
+            lastSession.month == today.month &&
+            lastSession.day == today.day;
+
+        // Vérifier si c'est le même créneau horaire
+        final isSameTimeSlot = lastSessionHoraire == currentHoraire;
+
+        return isSameDay && isSameTimeSlot;
+      }
+
+      return false;
+    } catch (e) {
+      print("Erreur vérification session précédente: $e");
+      return false;
+    }
   }
 
   Future<void> _checkClassTiming(Map<String, dynamic> classData) async {
@@ -197,35 +255,32 @@ class _AttendanceListState extends State<AttendanceList> {
 
     SessionStatus newStatus = SessionStatus.afterClass;
     int newRemainingTime = 0;
+    bool canStartQR = false;
 
-    if (dateDebut != null && dateFin != null) {
-      if (now.isBefore(dateDebut)) {
-        // Avant le cours
+    // UTILISER LA VARIABLE LOCALE AU LIEU D'APPELER LA MÉTHODE DIRECTEMENT
+    if (_hasSessionHappenedInThisTimeSlot) {
+      // Une session a déjà eu lieu dans ce créneau horaire - EMPÊCHER TOUTE NOUVELLE SESSION
+      newStatus = SessionStatus.afterClass;
+      canStartQR = false;
+      print('🚫 Session déjà effectuée pour ce créneau horaire - Nouvelle session bloquée');
+    }
+    else if (dateDebut != null && dateFin != null) {
+      final isBeforeClass = now.isBefore(dateDebut);
+      final isDuringClass = now.isAfter(dateDebut) && now.isBefore(dateFin);
+      final isAfterClass = now.isAfter(dateFin);
+
+      if (isBeforeClass) {
+        // AVANT le cours - ATTENDRE l'heure exacte
         newStatus = SessionStatus.beforeClass;
         newRemainingTime = dateDebut.difference(now).inSeconds;
         _startPreSessionTimer();
-      } else if (now.isAfter(dateDebut) && now.isBefore(dateFin)) {
-        // Pendant le cours - VÉRIFIER SI UNE SESSION A DÉJÀ EU LIEU PENDANT CETTE PLAGE HORAIRE
-        final todaySessionHappened = classData['todaySessionHappened'] as bool? ?? false;
-        final lastSessionDate = (classData['lastSessionDate'] as Timestamp?)?.toDate();
-
-        // Vérifier si la dernière session était pendant la même plage horaire aujourd'hui
-        final isSameTimeSlot = lastSessionDate != null &&
-            _isSameDay(lastSessionDate, now) &&
-            _isDuringClassTime(lastSessionDate, dateDebut, dateFin);
-
-        if (todaySessionHappened && isSameTimeSlot) {
-          // Une session a déjà eu lieu pendant cette plage horaire aujourd'hui - AFFICHER L'HISTORIQUE
-          newStatus = SessionStatus.afterClass;
-          _showSnackBar('Session de présence déjà terminée pour ce cours - Voir l\'historique', Colors.blue);
-        } else {
-          // Aucune session pendant cette plage horaire aujourd'hui - créer une nouvelle session
-          newStatus = SessionStatus.duringClass;
-          await _createNewSession();
-          return;
-        }
-      } else {
-        // Après le cours
+      } else if (isDuringClass) {
+        // PENDANT le cours - L'ENSEIGNANT PEUT DÉMARRER LE QR CODE
+        // MAIS SEULEMENT SI AUCUNE SESSION N'EST ACTIVE
+        newStatus = SessionStatus.duringClass;
+        canStartQR = sessionId == null; // SEULEMENT SI PAS DE SESSION ACTIVE
+      } else if (isAfterClass) {
+        // APRÈS le cours
         newStatus = SessionStatus.afterClass;
       }
     } else {
@@ -236,27 +291,94 @@ class _AttendanceListState extends State<AttendanceList> {
     setState(() {
       _sessionStatus = newStatus;
       _remainingTime = newRemainingTime;
+      _canStartQRSession = canStartQR;
       isLoading = false;
     });
   }
 
-  // Méthode utilitaire pour vérifier si deux dates sont le même jour
-  bool _isSameDay(DateTime date1, DateTime date2) {
-    return date1.year == date2.year &&
-        date1.month == date2.month &&
-        date1.day == date2.day;
+  Future<bool> _checkIfSessionAlreadyActive() async {
+    try {
+      final classDoc = await FirebaseFirestore.instance
+          .collection('classes')
+          .doc(widget.classId)
+          .get();
+
+      final existingSessionId = classDoc.data()?['attendanceSessionId'] as String?;
+
+      if (existingSessionId != null) {
+        final sessionDoc = await FirebaseFirestore.instance
+            .collection('attendances')
+            .doc(existingSessionId)
+            .get();
+
+        if (sessionDoc.exists) {
+          final sessionData = sessionDoc.data()!;
+          final isClosed = sessionData['isClosed'] ?? false;
+          final expiresAt = (sessionData['expiresAt'] as Timestamp?)?.toDate();
+
+          return !isClosed && expiresAt != null && DateTime.now().isBefore(expiresAt);
+        }
+      }
+
+      return false;
+    } catch (e) {
+      print("Erreur vérification session: $e");
+      return false;
+    }
   }
 
-  // Méthode utilitaire pour vérifier si une date est pendant les heures de cours
-  bool _isDuringClassTime(DateTime dateToCheck, DateTime classStart, DateTime classEnd) {
-    return dateToCheck.isAfter(classStart) && dateToCheck.isBefore(classEnd);
-  }
+  Future<void> _startQRSession() async {
+    // VÉRIFIER SI UNE SESSION A DÉJÀ EU LIEU DANS CE CRÉNEAU HORAIRE
+    if (_hasSessionHappenedInThisTimeSlot) {
+      _showSnackBar('Une session a déjà été effectuée pour ce créneau horaire aujourd\'hui', warningColor);
+      return;
+    }
 
-  Future<void> _createNewSession() async {
+    // EMPÊCHER LE DÉMARRAGE MULTIPLE
+    if (!_canStartQRSession || sessionId != null) {
+      _showSnackBar('Une session est déjà active', warningColor);
+      return;
+    }
+
     try {
       final newSessionId = "${widget.classId}_${DateTime.now().millisecondsSinceEpoch}";
       final now = DateTime.now();
-      final sessionEnd = now.add(Duration(seconds: _qrCodeDuration));
+
+      // VÉRIFIER UNE DERNIÈRE FOIS AVANT DE CRÉER
+      final classDoc = await FirebaseFirestore.instance
+          .collection('classes')
+          .doc(widget.classId)
+          .get();
+
+      // Vérifier si une session a déjà eu lieu dans ce créneau horaire (double vérification)
+      final sessionCompletedForTimeSlot = classDoc.data()?['sessionCompletedForTimeSlot'] ?? false;
+      final lastSessionHoraire = classDoc.data()?['lastSessionHoraire'] as String?;
+      final currentHoraire = widget.classData['horaireDebut'] as String?;
+
+      if (sessionCompletedForTimeSlot && lastSessionHoraire == currentHoraire) {
+        _showSnackBar('Une session a déjà été effectuée pour ce créneau horaire aujourd\'hui', warningColor);
+        return;
+      }
+
+      final existingSessionId = classDoc.data()?['attendanceSessionId'] as String?;
+      if (existingSessionId != null) {
+        final existingSession = await FirebaseFirestore.instance
+            .collection('attendances')
+            .doc(existingSessionId)
+            .get();
+
+        if (existingSession.exists && !(existingSession.data()?['isClosed'] ?? false)) {
+          _showSnackBar('Une session est déjà active pour ce cours', warningColor);
+          return;
+        }
+      }
+
+      // Session de 15 minutes exactement
+      final sessionEnd = now.add(Duration(minutes: 15));
+
+      print('🕒 Démarrage session QR: ${DateFormat('HH:mm').format(now)}');
+      print('⏰ Expiration session: ${DateFormat('HH:mm').format(sessionEnd)}');
+      print('⏱️ Durée totale: 15 minutes');
 
       // Créer la session dans Firestore
       await FirebaseFirestore.instance
@@ -270,6 +392,7 @@ class _AttendanceListState extends State<AttendanceList> {
         'presentStudentsUid': [],
         'isClosed': false,
         'sessionCode': _generateSessionCode(),
+        'sessionDuration': 15,
       });
 
       // Mettre à jour la classe avec la nouvelle session
@@ -278,31 +401,24 @@ class _AttendanceListState extends State<AttendanceList> {
           .doc(widget.classId)
           .update({
         'attendanceSessionId': newSessionId,
-        // Ne pas marquer comme terminée tant que la session n'est pas finie
+        // NE PAS marquer comme complétée ici - seulement à la fin de la session
       });
 
       // Mettre à jour l'état local
       setState(() {
         sessionId = newSessionId;
-        _remainingTime = _qrCodeDuration;
+        _remainingTime = sessionEnd.difference(now).inSeconds;
         isSessionClosed = false;
-        _sessionStatus = SessionStatus.duringClass;
-        isLoading = false;
+        _sessionStatus = SessionStatus.qrCodeActive;
+        _canStartQRSession = false;
       });
 
       _startSessionTimer();
-
       _showSnackBar('QR Code activé pour 15 minutes', successColor);
 
     } catch (e) {
-      print("Erreur création session: $e");
-      _showSnackBar("Erreur création session: $e", errorColor);
-
-      setState(() {
-        isLoading = false;
-        _sessionStatus = SessionStatus.afterClass;
-        sessionId = null;
-      });
+      print("Erreur démarrage session QR: $e");
+      _showSnackBar("Erreur démarrage session QR: $e", errorColor);
     }
   }
 
@@ -334,9 +450,19 @@ class _AttendanceListState extends State<AttendanceList> {
         setState(() {
           _remainingTime--;
         });
+
+        // Afficher un message toutes les 30 secondes
+        if (_remainingTime % 30 == 0) {
+          final minutes = _remainingTime ~/ 60;
+          print('⏳ Attente début cours: ${minutes}min ${_remainingTime % 60}s');
+        }
       } else {
-        // Le cours commence maintenant - créer une session
-        _createNewSession();
+        // Le cours commence MAINTENANT - permettre le démarrage du QR Code
+        print('🎯 Heure du cours atteinte - QR Code disponible');
+        setState(() {
+          _sessionStatus = SessionStatus.duringClass;
+          _canStartQRSession = true;
+        });
         timer.cancel();
       }
     });
@@ -364,7 +490,7 @@ class _AttendanceListState extends State<AttendanceList> {
         'autoClosed': true,
       });
 
-      // 3. Supprimer la référence de session ET marquer comme terminée pour cette plage horaire
+      // 3. Supprimer la référence de session et MARQUER COMME COMPLÉTÉE POUR CE CRÉNEAU
       await FirebaseFirestore.instance
           .collection('classes')
           .doc(widget.classId)
@@ -372,12 +498,18 @@ class _AttendanceListState extends State<AttendanceList> {
         'attendanceSessionId': FieldValue.delete(),
         'todaySessionHappened': true,
         'lastSessionDate': Timestamp.now(),
+        'lastSessionHoraire': widget.classData['horaireDebut'], // Stocker l'horaire de la session
+        // AJOUTEZ CE CHAMP POUR EMPÊCHER LES NOUVELLES SESSIONS DANS CE CRÉNEAU
+        'sessionCompletedForTimeSlot': true,
       });
 
+      // METTRE À JOUR L'ÉTAT LOCAL
       setState(() {
         isSessionClosed = true;
         sessionId = null;
         _sessionStatus = SessionStatus.afterClass;
+        _canStartQRSession = false;
+        _hasSessionHappenedInThisTimeSlot = true; // METTRE À JOUR L'ÉTAT LOCAL
       });
 
       _sessionTimer?.cancel();
@@ -415,7 +547,7 @@ class _AttendanceListState extends State<AttendanceList> {
         'teacherUid': classData['enseignantUid'] ?? widget.classData['enseignantUid'] ?? 'unknown',
         'teacherName': classData['enseignantName'] ?? widget.classData['enseignantName'] ?? 'Enseignant',
         'createdAt': Timestamp.now(),
-        'sessionDuration': 15,
+        'sessionDuration': 15, // Durée fixe de 15 minutes
         'totalStudents': enrolledStudents.length,
         'presentCount': presentStudents.length,
         'absentCount': absentStudents.length,
@@ -556,8 +688,14 @@ class _AttendanceListState extends State<AttendanceList> {
       case SessionStatus.beforeClass:
         return 'Le cours commence dans ${_formatTime(_remainingTime)}';
       case SessionStatus.duringClass:
-        return 'QR Code actif - Expire dans: ${_formatTime(_remainingTime)}';
+        return 'Cours en cours - Démarrez le QR Code';
+      case SessionStatus.qrCodeActive:
+        final minutes = _remainingTime ~/ 60;
+        final seconds = _remainingTime % 60;
+        return 'QR Code actif - Expire dans: ${minutes}min ${seconds}s';
       case SessionStatus.afterClass:
+      // UTILISER LA VARIABLE LOCALE AU LIEU D'APPELER LA MÉTHODE
+
         return 'Session terminée - Présences sauvegardées';
       case SessionStatus.loading:
         return 'Chargement...';
@@ -572,6 +710,8 @@ class _AttendanceListState extends State<AttendanceList> {
         return Icons.schedule_rounded;
       case SessionStatus.duringClass:
         return Icons.play_lesson_rounded;
+      case SessionStatus.qrCodeActive:
+        return Icons.qr_code_rounded;
       case SessionStatus.afterClass:
         return Icons.done_all_rounded;
       case SessionStatus.loading:
@@ -586,6 +726,8 @@ class _AttendanceListState extends State<AttendanceList> {
       case SessionStatus.beforeClass:
         return warningColor;
       case SessionStatus.duringClass:
+        return primaryColor;
+      case SessionStatus.qrCodeActive:
         return successColor;
       case SessionStatus.afterClass:
         return Colors.blue;
@@ -601,7 +743,7 @@ class _AttendanceListState extends State<AttendanceList> {
         sessionId!.isNotEmpty &&
         !isSessionClosed &&
         _remainingTime > 0 &&
-        _sessionStatus == SessionStatus.duringClass;
+        _sessionStatus == SessionStatus.qrCodeActive;
   }
 
   @override
@@ -621,11 +763,11 @@ class _AttendanceListState extends State<AttendanceList> {
         foregroundColor: textPrimary,
         iconTheme: IconThemeData(color: textPrimary),
         actions: [
-          if (_sessionStatus == SessionStatus.duringClass && !isSessionClosed)
+          if (_sessionStatus == SessionStatus.qrCodeActive && !isSessionClosed)
             IconButton(
               icon: Icon(Icons.info_outline_rounded),
               onPressed: () {
-                _showSnackBar('Les présences se sauvegardent automatiquement', primaryColor);
+                _showSnackBar('QR Code valable 15 minutes - Sauvegarde automatique', primaryColor);
               },
               tooltip: 'Sauvegarde automatique',
             ),
@@ -639,6 +781,20 @@ class _AttendanceListState extends State<AttendanceList> {
           if (sessionId != null && snapshot.hasData) {
             final data = snapshot.data!.data() as Map<String, dynamic>;
             final expiresAt = data['expiresAt'] as Timestamp?;
+            final isClosed = data['isClosed'] ?? false;
+
+            // SI LA SESSION EST FERMÉE, METTRE À JOUR L'ÉTAT
+            if (isClosed && !isSessionClosed) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                setState(() {
+                  isSessionClosed = true;
+                  sessionId = null;
+                  _sessionStatus = SessionStatus.afterClass;
+                  _canStartQRSession = false;
+                  _hasSessionHappenedInThisTimeSlot = true; // METTRE À JOUR L'ÉTAT LOCAL
+                });
+              });
+            }
 
             if (expiresAt != null) {
               final calculatedRemainingTime = _calculateRemainingTime(expiresAt);
@@ -679,6 +835,14 @@ class _AttendanceListState extends State<AttendanceList> {
                 _buildHeader(presentCount, absentCount),
                 const SizedBox(height: 8),
                 _buildStatusSection(),
+                // AFFICHER DIRECTEMENT LE MESSAGE SI SESSION DÉJÀ EFFECTUÉE
+                if (_hasSessionHappenedInThisTimeSlot) ...[
+                  const SizedBox(height: 8),
+                  _buildSessionAlreadyDoneSection(),
+                ] else if (_sessionStatus == SessionStatus.duringClass && _canStartQRSession) ...[
+                  const SizedBox(height: 8),
+                  _buildStartQRSection(),
+                ],
                 if (_canShowQRCode) ...[
                   const SizedBox(height: 8),
                   _buildQrCodeSection(),
@@ -732,7 +896,7 @@ class _AttendanceListState extends State<AttendanceList> {
               ),
             ),
           ),
-          if (_sessionStatus == SessionStatus.duringClass)
+          if (_sessionStatus == SessionStatus.qrCodeActive)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
@@ -744,7 +908,7 @@ class _AttendanceListState extends State<AttendanceList> {
                   Icon(Icons.auto_mode_rounded, size: 12, color: successColor),
                   const SizedBox(width: 4),
                   Text(
-                    'Auto',
+                    '15min',
                     style: TextStyle(
                       color: successColor,
                       fontSize: 10,
@@ -759,7 +923,147 @@ class _AttendanceListState extends State<AttendanceList> {
     );
   }
 
+  // NOUVELLE SECTION : AFFICHAGE DIRECT DU MESSAGE QUAND SESSION DÉJÀ EFFECTUÉE
+  Widget _buildSessionAlreadyDoneSection() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: surfaceColor,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: warningColor.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.info_rounded, color: warningColor, size: 14),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Session déjà effectuée',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: textPrimary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Une session de présence a déjà été réalisée pour ce créneau horaire aujourd\'hui',
+            style: TextStyle(
+              color: textSecondary,
+              fontSize: 10,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Horaire: ${widget.classData['horaireDebut'] ?? 'Non spécifié'} - ${widget.classData['horaireFin'] ?? 'Non spécifié'}',
+            style: TextStyle(
+              color: primaryColor,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStartQRSection() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: surfaceColor,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: primaryColor.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.play_arrow_rounded, color: primaryColor, size: 14),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Démarrer le QR Code de présence',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: textPrimary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Le QR Code sera actif pendant 15 minutes',
+            style: TextStyle(
+              color: textSecondary,
+              fontSize: 10,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _startQRSession,
+              icon: Icon(Icons.qr_code_rounded, size: 16),
+              label: Text('Démarrer QR Code (15min)'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildQrCodeSection() {
+    final minutes = _remainingTime ~/ 60;
+    final seconds = _remainingTime % 60;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
@@ -817,13 +1121,22 @@ class _AttendanceListState extends State<AttendanceList> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Durée: 15 minutes • Sauvegarde automatique',
+            'Durée: 15 minutes • Expire dans: ${minutes}min ${seconds}s',
             style: TextStyle(
               color: textSecondary,
               fontSize: 10,
               fontWeight: FontWeight.w500,
             ),
             textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Sauvegarde automatique à la fin',
+            style: TextStyle(
+              color: successColor,
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -903,7 +1216,9 @@ class _AttendanceListState extends State<AttendanceList> {
                   Icon(Icons.verified_rounded, size: 14, color: Colors.blue),
                   const SizedBox(width: 4),
                   Text(
-                    'Présences sauvegardées dans l\'historique',
+                    _hasSessionHappenedInThisTimeSlot
+                        ? 'Session déjà effectuée pour ce créneau horaire'
+                        : 'Présences sauvegardées dans l\'historique',
                     style: TextStyle(
                       color: Colors.blue,
                       fontSize: 10,

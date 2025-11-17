@@ -119,7 +119,7 @@ class _QRScannerPageState extends State<QRScannerPage> {
         await _createHistoryRecord(attendanceData);
 
         _showResultDialog(
-          'Présence enregistrée !',
+          'Présence Valide!',
           'Votre présence a été validée pour ${widget.className}',
           true,
         );
@@ -172,7 +172,7 @@ class _QRScannerPageState extends State<QRScannerPage> {
         });
 
         _showResultDialog(
-          'Présence enregistrée !',
+          'Présence Valide!',
           'Votre présence a été validée pour ${widget.className}',
           true,
         );

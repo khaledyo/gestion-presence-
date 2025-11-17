@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
-// 🔸 Tes autres pages
+import 'password_reset_email_page.dart';
 import 'admin_home_page.dart';
 import 'dashboard_etudiant.dart';
 import 'dashboard_enseignant.dart';
@@ -19,7 +18,6 @@ class _MyLoginState extends State<MyLogin> {
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
 
-  // 🔥 Connexion Firebase + redirection par rôle
   Future<void> _login() async {
     if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
       _showMessage("Remplis tous les champs 😊");
@@ -34,89 +32,136 @@ class _MyLoginState extends State<MyLogin> {
     setState(() => _isLoading = true);
 
     try {
-      // ✅ Authentification Firebase
+      final String email = _emailController.text.trim();
+      final String password = _passwordController.text.trim();
+
+
+
+      // ✅ CONNEXION AVEC FIREBASE AUTH
       final userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
+        email: email,
+        password: password,
       );
 
-      final uid = userCredential.user!.uid;
+      final User user = userCredential.user!;
+      final String uid = user.uid;
 
-      // ✅ Récupération du document Firestore
-      final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+
+
+      // ✅ RÉCUPÉRATION DES DONNÉES FIRESTORE
+      final DocumentSnapshot userDoc =
+      await FirebaseFirestore.instance.collection('users').doc(uid).get();
 
       if (!userDoc.exists) {
-        _showMessage("Compte non trouvé");
+        _showMessage("❌ Données utilisateur non trouvées dans Firestore");
+        setState(() => _isLoading = false);
         return;
       }
 
-      final userName = userDoc['nom'] ?? 'Utilisateur';
-      final userEmail = userDoc['email'] ?? _emailController.text.trim(); // AJOUT: Récupération de l'email
-      final role = userDoc['role']?.toString().toLowerCase() ?? 'étudiant';
+      final String userName = userDoc['nom'] ?? 'Utilisateur';
+      final String userEmail = userDoc['email'] ?? email;
+      final String role = userDoc['role']?.toString().toLowerCase() ?? 'étudiant';
 
-      // ✅ Redirection selon le rôle
-      if (role == "admin") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AdminHomePage(
-              userName: userName,
-              userUid: uid,
-            ),
-          ),
-        );
-      } else if (role == "enseignant") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => DashboardEnseignant(
-              userName: userName,
-              userUid: uid,
-              userEmail: userEmail, // AJOUT: Paramètre userEmail
-            ),
-          ),
-        );
-      } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => DashboardEtudiant(
-              userName: userName,
-              userUid: uid,
-            ),
-          ),
-        );
-      }
+
+
+      // ✅ REDIRECTION SELON LE RÔLE
+      _redirectUser(role, userName, uid, userEmail);
+
     } on FirebaseAuthException catch (e) {
+      setState(() => _isLoading = false);
+
       String message;
       switch (e.code) {
         case 'user-not-found':
-          message = "Compte inexistant";
+          message = "❌ Aucun compte avec cet email";
           break;
         case 'wrong-password':
-          message = "Mot de passe incorrect";
+          message = "❌ Mot de passe incorrect";
+          _showPasswordResetSuggestion();
           break;
         case 'invalid-email':
-          message = "Format email invalide";
+          message = "❌ Format email invalide";
           break;
         case 'user-disabled':
-          message = "Compte désactivé";
+          message = "❌ Compte désactivé";
           break;
         case 'too-many-requests':
-          message = "Trop de tentatives";
+          message = "❌ Trop de tentatives. Réessayez plus tard";
           break;
         case 'network-request-failed':
-          message = "Problème de connexion";
+          message = "❌ Problème de connexion internet";
           break;
         default:
-          message = "Erreur de connexion";
+          message = "❌  Probléme de connexion";
       }
       _showMessage(message);
+
+
     } catch (e) {
-      _showMessage("Erreur inattendue");
-    } finally {
       setState(() => _isLoading = false);
+
+      _showMessage("❌ Erreur de connexion");
     }
+  }
+
+  void _redirectUser(String role, String userName, String uid, String userEmail) {
+
+
+    Widget targetPage;
+
+    switch (role) {
+      case "admin":
+        targetPage = AdminHomePage(userName: userName, userUid: uid);
+        break;
+      case "enseignant":
+        targetPage = DashboardEnseignant(
+            userName: userName,
+            userUid: uid,
+            userEmail: userEmail
+        );
+        break;
+      default:
+        targetPage = DashboardEtudiant(userName: userName, userUid: uid);
+        break;
+    }
+
+    // ✅ NAVIGATION AVEC SUCCÈS
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => targetPage),
+    );
+
+
+  }
+
+  void _showPasswordResetSuggestion() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Mot de passe oublié ?"),
+        content: Text("Vous avez récemment changé votre mot de passe ?\nUtilisez le nouveau mot de passe."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("OK"),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _navigateToResetPassword();
+            },
+            child: Text("Réinitialiser"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _navigateToResetPassword() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => PasswordResetEmailPage()),
+    );
   }
 
   void _showMessage(String message) {
@@ -138,7 +183,7 @@ class _MyLoginState extends State<MyLogin> {
             ),
           ],
         ),
-        backgroundColor: Color(0xFF0D47A1),
+        backgroundColor: message.contains("✅") ? Colors.green : Color(0xFF0D47A1),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         margin: EdgeInsets.all(16),
@@ -221,10 +266,8 @@ class _MyLoginState extends State<MyLogin> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: () {
-                    _showMessage("Fonctionnalité bientôt disponible");
-                  },
-                  child: const Text(
+                  onPressed: _navigateToResetPassword,
+                  child: Text(
                     "Mot de passe oublié ?",
                     style: TextStyle(
                       color: Color(0xFF0D47A1),

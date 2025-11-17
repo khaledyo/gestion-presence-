@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
-
+import 'dart:io';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:ui';
 import 'create_class_page.dart';
 import 'attendance_list.dart';
 import 'history_details_page.dart';
@@ -35,6 +40,164 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
   bool _isDeleteMode = false;
   bool _isEditMode = false;
   String? _userEmail;
+  String _currentUserName = '';
+
+  final ImagePicker _imagePicker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    _currentUserName = widget.userName;
+    _fetchUserEmail();
+  }
+
+  void _updateUserName(String newName) {
+    if (mounted) {
+      setState(() {
+        _currentUserName = newName;
+      });
+    }
+  }
+
+  // REMPLACEZ la méthode _getProfilePictureUrl() par ceci :
+  Stream<String?> getProfilePictureStream() {
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.userUid)
+        .snapshots()
+        .map((snapshot) {
+      if (snapshot.exists) {
+        final userData = snapshot.data() as Map<String, dynamic>;
+        return userData['profilePicture'] as String?;
+      }
+      return null;
+    });
+  }
+
+  Stream<String?> getUserNameStream() {
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.userUid)
+        .snapshots()
+        .map((snapshot) {
+      if (snapshot.exists) {
+        final userData = snapshot.data() as Map<String, dynamic>;
+        return userData['nom'] as String?;
+      }
+      return null;
+    });
+  }
+
+  Future<void> _pickImageFromGallery(StateSetter setState) async {
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 80,
+      );
+
+      if (image != null) {
+        await _uploadProfilePicture(File(image.path), setState);
+      }
+    } catch (e) {
+      _showMessage("Erreur: $e");
+    }
+  }
+
+  Future<void> _takePhotoWithCamera(StateSetter setState) async {
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 80,
+      );
+
+      if (image != null) {
+        await _uploadProfilePicture(File(image.path), setState);
+      }
+    } catch (e) {
+      _showMessage("Erreur: $e");
+    }
+  }
+
+  Future<void> _uploadProfilePicture(File image, StateSetter setState) async {
+    try {
+      _showMessage("📤 Upload vers Cloudinary...");
+
+      if (!await image.exists()) {
+        _showMessage("❌ Fichier image non trouvé");
+        return;
+      }
+
+      print('📁 Début upload Cloudinary...');
+
+      final url = Uri.parse('https://api.cloudinary.com/v1_1/dzv7zgtln/image/upload');
+      var request = http.MultipartRequest('POST', url)
+        ..fields['upload_preset'] = 'presence_app_upload'
+        ..fields['folder'] = 'presence_app/profile_pictures'
+        ..files.add(await http.MultipartFile.fromPath(
+          'file',
+          image.path,
+          filename: 'profile_${widget.userUid}.jpg',
+        ));
+
+      var response = await request.send().timeout(Duration(seconds: 30));
+      var responseData = await response.stream.bytesToString();
+
+      if (response.statusCode == 200) {
+        var jsonResponse = json.decode(responseData);
+        var imageUrl = jsonResponse['secure_url'];
+
+        // SAUVEGARDEZ dans Firestore - le StreamBuilder se mettra à jour automatiquement
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(widget.userUid)
+            .update({
+          'profilePicture': imageUrl,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+
+        _showMessage("✅ Photo uploadée avec Cloudinary !");
+
+      } else {
+        _showMessage("❌ Erreur lors de l'upload");
+      }
+
+    } catch (e) {
+      _showMessage("❌ Erreur: ${e.toString()}");
+    }
+  }
+
+  Future<void> _deleteProfilePicture(StateSetter setState) async {
+    try {
+      // Supprimer de Firestore - le StreamBuilder se mettra à jour automatiquement
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.userUid)
+          .update({
+        'profilePicture': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      _showMessage("✅ Photo de profil supprimée");
+
+    } catch (e) {
+      _showMessage("❌ Erreur lors de la suppression: ${e.toString()}");
+    }
+  }
+
+  void _openEditProfileDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => EditProfileDialog(
+        userUid: widget.userUid,
+        currentName: _currentUserName,
+        onProfileUpdated: _updateUserName,
+      ),
+    );
+  }
 
   final List<IconData> classIcons = const [
     Icons.school_outlined,
@@ -55,12 +218,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     Icons.engineering_outlined,
     Icons.laptop_mac_outlined,
   ];
-
-  @override
-  void initState() {
-    super.initState();
-    _fetchUserEmail();
-  }
 
   Future<void> _fetchUserEmail() async {
     try {
@@ -170,6 +327,10 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       setState(() {
         _isEditMode = false;
       });
+
+      // Forcer le rafraîchissement des données
+      await Future.delayed(Duration(milliseconds: 500));
+      setState(() {});
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -700,6 +861,18 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     );
   }
 
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: DashboardEnseignant.primaryColor,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
   Widget _buildHistoryCard(Map<String, dynamic> data, String historyId) {
     try {
       Timestamp? dateTimestamp;
@@ -806,35 +979,38 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    color: DashboardEnseignant.primaryColor.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    Icons.person_outline_rounded,
-                    size: 40,
-                    color: DashboardEnseignant.primaryColor,
-                  ),
-                ),
+                // PHOTO DE PROFIL AVEC UPLOAD
+                _buildProfilePhotoSection(),
                 const SizedBox(height: 16),
-                Text(
-                  widget.userName,
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: DashboardEnseignant.textColor,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  "Enseignant",
-                  style: TextStyle(
-                    color: DashboardEnseignant.hintColor,
-                    fontSize: 16,
-                  ),
+                // StreamBuilder pour le nom dans le profil
+                StreamBuilder<String?>(
+                  stream: getUserNameStream(),
+                  builder: (context, snapshot) {
+                    final userName = snapshot.hasData && snapshot.data != null
+                        ? snapshot.data!
+                        : _currentUserName;
+
+                    return Column(
+                      children: [
+                        Text(
+                          userName,
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: DashboardEnseignant.textColor,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Enseignant",
+                          style: TextStyle(
+                            color: DashboardEnseignant.hintColor,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 20),
                 Divider(color: Colors.grey.shade300),
@@ -844,15 +1020,11 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                     "Email",
                     _userEmail ?? "Chargement..."
                 ),
-                const SizedBox(height: 16),
-                _buildProfileInfoItem(Icons.phone_outlined, "Téléphone", "+33 1 23 45 67 89"),
-                const SizedBox(height: 16),
-                _buildProfileInfoItem(Icons.school_outlined, "Matières", "Mathématiques, Physique"),
                 const SizedBox(height: 30),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: () {},
+                    onPressed: _openEditProfileDialog,
                     icon: Icon(Icons.edit_outlined, size: 18),
                     label: Text('Modifier le profil'),
                     style: ElevatedButton.styleFrom(
@@ -887,6 +1059,169 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildProfilePhotoSection() {
+    return StatefulBuilder(
+      builder: (context, setState) {
+        return StreamBuilder<String?>(
+          stream: getProfilePictureStream(),
+          builder: (context, snapshot) {
+            final profilePictureUrl = snapshot.data;
+
+            return Column(
+              children: [
+                Stack(
+                  children: [
+                    Container(
+                      width: 100,
+                      height: 100,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: DashboardEnseignant.primaryColor.withOpacity(0.3),
+                          width: 3,
+                        ),
+                      ),
+                      child: ClipOval(
+                        child: profilePictureUrl != null && profilePictureUrl.isNotEmpty
+                            ? Image.network(
+                          profilePictureUrl,
+                          fit: BoxFit.cover,
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return Center(
+                              child: CircularProgressIndicator(
+                                color: DashboardEnseignant.primaryColor,
+                              ),
+                            );
+                          },
+                          errorBuilder: (context, error, stackTrace) {
+                            return _buildDefaultProfileAvatar();
+                          },
+                        )
+                            : _buildDefaultProfileAvatar(),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: GestureDetector(
+                        onTap: () => _showPhotoOptions(context, setState),
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: DashboardEnseignant.primaryColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: DashboardEnseignant.surfaceColor,
+                              width: 2,
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.camera_alt_rounded,
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Cliquez sur l\'appareil photo pour modifier',
+                  style: TextStyle(
+                    color: DashboardEnseignant.hintColor,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // AVATAR PAR DÉFAUT
+  Widget _buildDefaultProfileAvatar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(
+        Icons.person_outline_rounded,
+        size: 40,
+        color: DashboardEnseignant.primaryColor,
+      ),
+    );
+  }
+
+  // OPTIONS POUR LA PHOTO
+  void _showPhotoOptions(BuildContext context, StateSetter setState) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: DashboardEnseignant.surfaceColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text(
+                  'Modifier la photo de profil',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: DashboardEnseignant.textColor,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: Icon(Icons.photo_library_rounded, color: DashboardEnseignant.primaryColor),
+                title: Text('Choisir depuis la galerie'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickImageFromGallery(setState);
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.camera_alt_rounded, color: DashboardEnseignant.primaryColor),
+                title: Text('Prendre une photo'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _takePhotoWithCamera(setState);
+                },
+              ),
+              StreamBuilder<String?>(
+                stream: getProfilePictureStream(),
+                builder: (context, snapshot) {
+                  if (snapshot.hasData && snapshot.data != null) {
+                    return ListTile(
+                      leading: Icon(Icons.delete_rounded, color: Colors.red),
+                      title: Text('Supprimer la photo', style: TextStyle(color: Colors.red)),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _deleteProfilePicture(setState);
+                      },
+                    );
+                  }
+                  return SizedBox.shrink();
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -957,288 +1292,522 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isSmallCard = constraints.maxWidth < 200;
+        final isSmallCard = constraints.maxWidth < 600;
+        final isTablet = constraints.maxWidth > 600;
 
         return Stack(
           children: [
-            Material(
-              color: DashboardEnseignant.surfaceColor,
-              borderRadius: BorderRadius.circular(16),
-              elevation: 1,
-              child: InkWell(
-                onTap: () => openAttendancePage(
-                  classId,
-                  {
-                    'nom': data['nom'],
-                    'horaireDebut': data['horaireDebut'],
-                    'horaireFin': data['horaireFin'],
-                    'jour': data['jour'],
-                    'nombreEtudiants': studentCount,
-                    'iconIndex': data['iconIndex'],
-                    'schoolClass': schoolClassName,
-                    'dateDebut': data['dateDebut'],
-                    'dateFin': data['dateFin'],
-                  },
-                ),
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  padding: EdgeInsets.all(isSmallCard ? 12 : 16),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: Colors.grey.shade200,
-                      width: 1,
-                    ),
+            // Carte principale avec effet 3D
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  // Ombre portée pour effet de profondeur
+                  BoxShadow(
+                    color: DashboardEnseignant.primaryColor.withOpacity(0.15),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                    spreadRadius: -2,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            width: isSmallCard ? 32 : 40,
-                            height: isSmallCard ? 32 : 40,
-                            decoration: BoxDecoration(
-                              color: DashboardEnseignant.primaryColor.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Icon(
-                              currentIcon,
-                              size: isSmallCard ? 18 : 22,
-                              color: DashboardEnseignant.primaryColor,
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: DashboardEnseignant.backgroundColor,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.group_rounded,
-                                  size: isSmallCard ? 14 : 16,
-                                  color: DashboardEnseignant.hintColor,
-                                ),
-                                const SizedBox(width: 2),
-                                Text(
-                                  studentCount.toString(),
-                                  style: TextStyle(
-                                    fontSize: isSmallCard ? 10 : 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: DashboardEnseignant.textColor,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+                  // Ombre interne pour effet d'élévation
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          DashboardEnseignant.surfaceColor.withOpacity(0.9),
+                          DashboardEnseignant.surfaceColor.withOpacity(0.7),
                         ],
                       ),
-                      SizedBox(height: isSmallCard ? 8 : 12),
-                      Text(
-                        (data['nom'] as String?) ?? 'Sans nom',
-                        style: TextStyle(
-                          fontSize: isSmallCard ? 14 : 16,
-                          fontWeight: FontWeight.w700,
-                          color: DashboardEnseignant.textColor,
-                          height: 1.3,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.2),
+                        width: 1,
                       ),
-                      SizedBox(height: isSmallCard ? 6 : 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: DashboardEnseignant.secondaryColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      borderRadius: BorderRadius.circular(20),
+                      child: InkWell(
+                        onTap: () => openAttendancePage(
+                          classId,
+                          {
+                            'nom': data['nom'],
+                            'horaireDebut': data['horaireDebut'],
+                            'horaireFin': data['horaireFin'],
+                            'jour': data['jour'],
+                            'nombreEtudiants': studentCount,
+                            'iconIndex': data['iconIndex'],
+                            'schoolClass': schoolClassName,
+                            'dateDebut': data['dateDebut'],
+                            'dateFin': data['dateFin'],
+                          },
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.school_rounded,
-                              size: isSmallCard ? 10 : 12,
-                              color: DashboardEnseignant.secondaryColor,
+                        borderRadius: BorderRadius.circular(20),
+                        splashColor: DashboardEnseignant.primaryColor.withOpacity(0.1),
+                        highlightColor: DashboardEnseignant.primaryColor.withOpacity(0.05),
+                        child: Container(
+                          padding: EdgeInsets.all(isSmallCard ? 14 : isTablet ? 20 : 18),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(20),
+                            // Effet de bordure lumineuse
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.3),
+                              width: 0.5,
                             ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                schoolClassName,
-                                style: TextStyle(
-                                  fontSize: isSmallCard ? 10 : 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: DashboardEnseignant.secondaryColor,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      SizedBox(height: isSmallCard ? 6 : 8),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(
-                                Icons.calendar_today_rounded,
-                                size: isSmallCard ? 10 : 12,
-                                color: DashboardEnseignant.hintColor,
-                              ),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  jourAffiche,
-                                  style: TextStyle(
-                                    fontSize: isSmallCard ? 10 : 12,
-                                    color: DashboardEnseignant.hintColor,
+                              // En-tête avec icône et compteur d'étudiants
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  // Icône avec effet 3D
+                                  Container(
+                                    width: isSmallCard ? 36 : isTablet ? 50 : 44,
+                                    height: isSmallCard ? 36 : isTablet ? 50 : 44,
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                        colors: [
+                                          DashboardEnseignant.primaryColor.withOpacity(0.15),
+                                          DashboardEnseignant.secondaryColor.withOpacity(0.1),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+                                          blurRadius: 8,
+                                          offset: const Offset(2, 2),
+                                        ),
+                                        BoxShadow(
+                                          color: Colors.white.withOpacity(0.5),
+                                          blurRadius: 8,
+                                          offset: const Offset(-2, -2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Stack(
+                                      children: [
+                                        // Effet de brillance
+                                        Positioned(
+                                          top: 4,
+                                          left: 4,
+                                          child: Container(
+                                            width: isSmallCard ? 8 : 12,
+                                            height: isSmallCard ? 8 : 12,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: Colors.white.withOpacity(0.3),
+                                            ),
+                                          ),
+                                        ),
+                                        Center(
+                                          child: Icon(
+                                            currentIcon,
+                                            size: isSmallCard ? 18 : isTablet ? 24 : 22,
+                                            color: DashboardEnseignant.primaryColor,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                  maxLines: 1,
+
+                                  // Badge étudiant avec effet 3D
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [
+                                          Colors.white.withOpacity(0.9),
+                                          Colors.grey.shade100,
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(10),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.05),
+                                          blurRadius: 4,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.4),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.group_rounded,
+                                          size: isSmallCard ? 12 : 14,
+                                          color: DashboardEnseignant.primaryColor,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          studentCount.toString(),
+                                          style: TextStyle(
+                                            fontSize: isSmallCard ? 10 : 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: DashboardEnseignant.textColor,
+                                            shadows: [
+                                              Shadow(
+                                                color: Colors.white.withOpacity(0.8),
+                                                blurRadius: 2,
+                                                offset: const Offset(0, 1),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+
+                              SizedBox(height: isSmallCard ? 10 : isTablet ? 16 : 14),
+
+                              // Nom de la séance avec effet de profondeur
+                              ShaderMask(
+                                shaderCallback: (bounds) {
+                                  return LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      DashboardEnseignant.textColor,
+                                      DashboardEnseignant.textColor.withOpacity(0.8),
+                                    ],
+                                  ).createShader(bounds);
+                                },
+                                child: Text(
+                                  (data['nom'] as String?) ?? 'Sans nom',
+                                  style: TextStyle(
+                                    fontSize: isSmallCard ? 14 : isTablet ? 18 : 16,
+                                    fontWeight: FontWeight.w800,
+                                    height: 1.2,
+                                    letterSpacing: -0.3,
+                                  ),
+                                  maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+
+                              SizedBox(height: isSmallCard ? 8 : isTablet ? 12 : 10),
+
+                              // Badge classe avec effet 3D
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                    colors: [
+                                      DashboardEnseignant.secondaryColor.withOpacity(0.1),
+                                      DashboardEnseignant.primaryColor.withOpacity(0.05),
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: DashboardEnseignant.secondaryColor.withOpacity(0.2),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(2),
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: DashboardEnseignant.secondaryColor.withOpacity(0.2),
+                                      ),
+                                      child: Icon(
+                                        Icons.school_rounded,
+                                        size: isSmallCard ? 10 : 12,
+                                        color: DashboardEnseignant.secondaryColor,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        schoolClassName,
+                                        style: TextStyle(
+                                          fontSize: isSmallCard ? 10 : 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: DashboardEnseignant.secondaryColor,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              SizedBox(height: isSmallCard ? 8 : isTablet ? 12 : 10),
+
+                              // Informations date et heure avec icônes 3D
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.3),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.4),
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    // Date
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(4),
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+                                          ),
+                                          child: Icon(
+                                            Icons.calendar_today_rounded,
+                                            size: isSmallCard ? 10 : 12,
+                                            color: DashboardEnseignant.primaryColor,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            jourAffiche,
+                                            style: TextStyle(
+                                              fontSize: isSmallCard ? 10 : 12,
+                                              fontWeight: FontWeight.w500,
+                                              color: DashboardEnseignant.textColor,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+
+                                    if (data['horaireDebut'] != null && data['horaireFin'] != null) ...[
+                                      SizedBox(height: isSmallCard ? 4 : 6),
+                                      // Horaire
+                                      Row(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.all(4),
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: DashboardEnseignant.secondaryColor.withOpacity(0.1),
+                                            ),
+                                            child: Icon(
+                                              Icons.access_time_rounded,
+                                              size: isSmallCard ? 10 : 12,
+                                              color: DashboardEnseignant.secondaryColor,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '${data['horaireDebut']} - ${data['horaireFin']}',
+                                            style: TextStyle(
+                                              fontSize: isSmallCard ? 10 : 12,
+                                              fontWeight: FontWeight.w500,
+                                              color: DashboardEnseignant.textColor,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+
+                              const Spacer(),
+
+                              // Séparateur avec effet de profondeur
+                              Container(
+                                height: 1,
+                                margin: const EdgeInsets.only(bottom: 8),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                    colors: [
+                                      Colors.transparent,
+                                      Colors.white.withOpacity(0.5),
+                                      Colors.transparent,
+                                    ],
+                                  ),
+                                ),
+                              ),
+
+                              // Footer avec CTA
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4),
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      'Voir les présences',
+                                      style: TextStyle(
+                                        fontSize: isSmallCard ? 9 : 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: DashboardEnseignant.primaryColor,
+                                        shadows: [
+                                          Shadow(
+                                            color: Colors.white.withOpacity(0.8),
+                                            blurRadius: 2,
+                                            offset: const Offset(0, 1),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Container(
+                                      padding: const EdgeInsets.all(4),
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                          colors: [
+                                            DashboardEnseignant.primaryColor,
+                                            DashboardEnseignant.secondaryColor,
+                                          ],
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: DashboardEnseignant.primaryColor.withOpacity(0.3),
+                                            blurRadius: 4,
+                                            offset: const Offset(0, 2),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Icon(
+                                        Icons.arrow_forward_ios_rounded,
+                                        size: isSmallCard ? 10 : 12,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
                           ),
-                          if (data['horaireDebut'] != null && data['horaireFin'] != null) ...[
-                            SizedBox(height: isSmallCard ? 2 : 4),
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.access_time_rounded,
-                                  size: isSmallCard ? 10 : 12,
-                                  color: DashboardEnseignant.hintColor,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  '${data['horaireDebut']} - ${data['horaireFin']}',
-                                  style: TextStyle(
-                                    fontSize: isSmallCard ? 10 : 12,
-                                    color: DashboardEnseignant.hintColor,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
+                        ),
                       ),
-                      const Spacer(),
-                      Container(
-                        height: 1,
-                        color: Colors.grey.shade200,
-                        margin: const EdgeInsets.only(bottom: 3),
-                      ),
-                      Row(
-                        children: [
-                          Text(
-                            'Voir les présences',
-                            style: TextStyle(
-                              fontSize: isSmallCard ? 9 : 11,
-                              color: DashboardEnseignant.hintColor,
-                            ),
-                          ),
-                          const Spacer(),
-                          Icon(
-                            Icons.arrow_forward_ios_rounded,
-                            size: isSmallCard ? 10 : 12,
-                            color: DashboardEnseignant.hintColor,
-                          ),
-                        ],
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
+
+            // Boutons d'action (suppression/modification) avec effet 3D
             if (_isDeleteMode)
               Positioned(
-                top: 6,
-                right: 6,
+                top: 8,
+                right: 8,
                 child: GestureDetector(
                   onTap: () async {
                     final confirm = await showDialog<bool>(
                       context: context,
-                      builder: (context) => AlertDialog(
-                        backgroundColor: DashboardEnseignant.surfaceColor,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        title: Text(
-                          'Supprimer la séance',
-                          style: TextStyle(
-                            color: DashboardEnseignant.textColor,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        content: Text(
-                          'Êtes-vous sûr de vouloir supprimer cette séance ? Cette action est irréversible.',
-                          style: TextStyle(color: DashboardEnseignant.hintColor),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: Text(
-                              'Annuler',
-                              style: TextStyle(color: DashboardEnseignant.hintColor),
-                            ),
-                          ),
-                          ElevatedButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: const Text('Supprimer'),
-                          ),
-                        ],
-                      ),
+                      builder: (context) => _build3DConfirmationDialog(),
                     );
                     if (confirm == true) {
                       setState(() {
                         _isDeleteMode = false;
                       });
                       await deleteClass(classId);
-
                     }
                   },
                   child: Container(
-                    width: 20,
-                    height: 20,
-                    decoration: const BoxDecoration(
-                      color: Colors.red,
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.red.shade400,
+                          Colors.red.shade600,
+                        ],
+                      ),
                       shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.red.withOpacity(0.4),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                        BoxShadow(
+                          color: Colors.white.withOpacity(0.2),
+                          blurRadius: 2,
+                          offset: const Offset(-1, -1),
+                        ),
+                      ],
                     ),
                     child: const Icon(
                       Icons.close_rounded,
                       color: Colors.white,
-                      size: 12,
+                      size: 14,
                     ),
                   ),
                 ),
               ),
+
             if (_isEditMode)
               Positioned(
-                top: 6,
-                right: 6,
+                top: 8,
+                right: 8,
                 child: GestureDetector(
                   onTap: () => editClass(classId, data),
                   child: Container(
-                    width: 20,
-                    height: 20,
-                    decoration: const BoxDecoration(
-                      color: Colors.orange,
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.orange.shade400,
+                          Colors.orange.shade600,
+                        ],
+                      ),
                       shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.orange.withOpacity(0.4),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                        BoxShadow(
+                          color: Colors.white.withOpacity(0.2),
+                          blurRadius: 2,
+                          offset: const Offset(-1, -1),
+                        ),
+                      ],
                     ),
                     child: const Icon(
                       Icons.edit_rounded,
                       color: Colors.white,
-                      size: 12,
+                      size: 14,
                     ),
                   ),
                 ),
@@ -1248,8 +1817,171 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       },
     );
   }
+  Widget _build3DConfirmationDialog() {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              DashboardEnseignant.surfaceColor.withOpacity(0.95),
+              DashboardEnseignant.surfaceColor.withOpacity(0.8),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 30,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icône d'avertissement 3D
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Colors.red.shade400,
+                      Colors.red.shade600,
+                    ],
+                  ),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.red.withOpacity(0.4),
+                      blurRadius: 15,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Colors.white,
+                  size: 30,
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              Text(
+                'Supprimer la séance',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: DashboardEnseignant.textColor,
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              Text(
+                'Cette action est irréversible. Voulez-vous vraiment supprimer cette séance ?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: DashboardEnseignant.hintColor,
+                  fontSize: 14,
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            blurRadius: 8,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: DashboardEnseignant.textColor,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        child: const Text('Annuler'),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 12),
+
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.red.withOpacity(0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        child: const Text('Supprimer'),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+  // AJOUTEZ cette méthode pour l'avatar de fallback dans l'AppBar
+  Widget _buildAppBarFallbackAvatar(bool isSmallScreen) {
+    return Container(
+      decoration: BoxDecoration(
+        color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(
+        Icons.person_rounded,
+        color: DashboardEnseignant.primaryColor,
+        size: isSmallScreen ? 18 : 20,
+      ),
+    );
+  }
 
   @override
+
   Widget build(BuildContext context) {
     final pages = _buildPages();
     return Scaffold(
@@ -1262,45 +1994,89 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
           builder: (context, constraints) {
             final isSmallScreen = constraints.maxWidth < 400;
 
-            return Row(
-              children: [
-                Container(
-                  width: isSmallScreen ? 36 : 40,
-                  height: isSmallScreen ? 36 : 40,
-                  decoration: BoxDecoration(
-                    color: DashboardEnseignant.primaryColor.withOpacity(0.1),
-                    shape: BoxShape.circle,
+            return GestureDetector(
+              onTap: () {
+                // Naviguer vers la page Profil
+                setState(() {
+                  _selectedIndex = 2;
+                });
+              },
+              child: Row(
+                children: [
+                  // StreamBuilder pour la photo de profil
+                  StreamBuilder<String?>(
+                    stream: getProfilePictureStream(),
+                    builder: (context, snapshot) {
+                      final profilePictureUrl = snapshot.data;
+
+                      return Container(
+                        width: isSmallScreen ? 44 : 40,
+                        height: isSmallScreen ? 44 : 40,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: DashboardEnseignant.primaryColor.withOpacity(0.3),
+                            width: 1,
+                          ),
+                        ),
+                        child: ClipOval(
+                          child: profilePictureUrl != null && profilePictureUrl.isNotEmpty
+                              ? Image.network(
+                            profilePictureUrl,
+                            fit: BoxFit.cover,
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return Center(
+                                child: CircularProgressIndicator(
+                                  color: DashboardEnseignant.primaryColor,
+                                  strokeWidth: 2,
+                                ),
+                              );
+                            },
+                            errorBuilder: (context, error, stackTrace) {
+                              return _buildAppBarFallbackAvatar(isSmallScreen);
+                            },
+                          )
+                              : _buildAppBarFallbackAvatar(isSmallScreen),
+                        ),
+                      );
+                    },
                   ),
-                  child: Icon(
-                    Icons.school_rounded,
-                    color: DashboardEnseignant.primaryColor,
-                    size: isSmallScreen ? 18 : 20,
+                  SizedBox(width: isSmallScreen ? 8 : 12),
+                  // StreamBuilder pour le nom
+                  StreamBuilder<String?>(
+                    stream: getUserNameStream(),
+                    builder: (context, snapshot) {
+                      final userName = snapshot.hasData && snapshot.data != null
+                          ? snapshot.data!
+                          : _currentUserName;
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            userName,
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 14 : 16,
+                              color: DashboardEnseignant.textColor,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            "Espace Enseignant",
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 11 : 13,
+                              color: DashboardEnseignant.hintColor,
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
-                ),
-                SizedBox(width: isSmallScreen ? 8 : 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.userName,
-                      style: TextStyle(
-                        fontSize: isSmallScreen ? 14 : 16,
-                        color: DashboardEnseignant.textColor,
-                        fontWeight: FontWeight.w700,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      "Espace Enseignant",
-                      style: TextStyle(
-                        fontSize: isSmallScreen ? 11 : 13,
-                        color: DashboardEnseignant.hintColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                ],
+              ),
             );
           },
         ),
@@ -1843,6 +2619,10 @@ class _EditClassDialogState extends State<EditClassDialog> {
         'dateFin': Timestamp.fromDate(dateFin),
         'horaireDebut': _heureDebutCtrl.text,
         'horaireFin': _heureFinCtrl.text,
+        // Réinitialiser les flags de session pour permettre une nouvelle session
+        'todaySessionHappened': false,
+        'lastSessionDate': FieldValue.delete(),
+        'attendanceSessionId': FieldValue.delete(),
       };
 
       if (_selectedClass!.id != widget.initialData['schoolClassId']) {
@@ -2263,6 +3043,258 @@ class _EditClassDialogState extends State<EditClassDialog> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class EditProfileDialog extends StatefulWidget {
+  final String userUid;
+  final String currentName;
+  final Function(String)? onProfileUpdated;
+
+  const EditProfileDialog({
+    Key? key,
+    required this.userUid,
+    required this.currentName,
+    this.onProfileUpdated,
+  }) : super(key: key);
+
+  @override
+  State<EditProfileDialog> createState() => _EditProfileDialogState();
+}
+
+class _EditProfileDialogState extends State<EditProfileDialog> {
+  final TextEditingController _nameController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  bool _isSaving = false;
+
+  final Color _primaryColor = const Color(0xFF6366F1);
+  final Color _backgroundColor = const Color(0xFFF8FAFD);
+  final Color _surfaceColor = Colors.white;
+  final Color _textColor = const Color(0xFF2D3748);
+  final Color _hintColor = const Color(0xFF718096);
+  final Color _borderColor = const Color(0xFFE2E8F0);
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController.text = widget.currentName;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveProfile() async {
+    if (_formKey.currentState!.validate()) {
+      setState(() => _isSaving = true);
+
+      try {
+        // Mettre à jour dans Firestore avec le champ "nom"
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(widget.userUid)
+            .update({
+          'nom': _nameController.text.trim(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+
+        // Afficher un message de succès
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Profil mis à jour avec succès ✅'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            backgroundColor: _primaryColor,
+          ),
+        );
+
+        // Notifier le parent du changement
+        widget.onProfileUpdated?.call(_nameController.text.trim());
+
+        // Fermer la boîte de dialogue
+        if (mounted) {
+          Navigator.pop(context);
+        }
+
+      } catch (e) {
+        // Afficher un message d'erreur
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur lors de la mise à jour: $e'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            backgroundColor: Colors.red,
+          ),
+        );
+      } finally {
+        if (mounted) {
+          setState(() => _isSaving = false);
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _surfaceColor,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.all(20),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: 500,
+          maxHeight: 400,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // En-tête
+              Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: _primaryColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.person_rounded, color: _primaryColor, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Modifier le profil',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: _textColor,
+                          ),
+                        ),
+                        Text(
+                          'Mettez à jour vos informations',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _hintColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+
+              // Formulaire
+              Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Nom d\'utilisateur',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: _textColor,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _nameController,
+                      style: TextStyle(color: _textColor, fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: 'Entrez votre nom',
+                        hintStyle: TextStyle(color: _hintColor, fontSize: 13),
+                        filled: true,
+                        fillColor: _backgroundColor,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        prefixIcon: Icon(Icons.person_outline_rounded, color: _primaryColor, size: 18),
+                      ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Veuillez entrer un nom';
+                        }
+                        if (value.trim().length < 2) {
+                          return 'Le nom doit contenir au moins 2 caractères';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Ce nom sera visible par vos étudiants',
+                      style: TextStyle(
+                        color: _hintColor,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // Boutons d'action
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _isSaving ? null : () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _primaryColor,
+                        side: BorderSide(color: _primaryColor),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      child: const Text('Annuler'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _isSaving ? null : _saveProfile,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primaryColor,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      child: _isSaving
+                          ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                          : const Text('Enregistrer'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

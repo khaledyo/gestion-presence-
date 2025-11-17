@@ -88,6 +88,9 @@ class _ClassesListPageState extends State<ClassesListPage> {
       classes = updatedClasses;
       isLoading = false;
     });
+
+    print('📊 ${updatedClasses.length} classes chargées');
+    _debugSessionStatus();
   }
 
   void _setupTeacherListener(String teacherUid, String classId) {
@@ -111,6 +114,8 @@ class _ClassesListPageState extends State<ClassesListPage> {
   }
 
   void _setupSessionListener(String classId) {
+    print('🎯 Configuration écouteur session pour: $classId');
+
     // Écouter les sessions actives dans attendances
     final attendanceSubscription = FirebaseFirestore.instance
         .collection('attendances')
@@ -118,46 +123,53 @@ class _ClassesListPageState extends State<ClassesListPage> {
         .where('isClosed', isEqualTo: false)
         .snapshots()
         .listen((snapshot) {
-      final hasActiveAttendance = snapshot.docs.isNotEmpty;
-      if (hasActiveAttendance) {
-        final session = snapshot.docs.first;
-        final expiresAt = (session.data()['expiresAt'] as Timestamp?)?.toDate();
-        final isActive = expiresAt != null && DateTime.now().isBefore(expiresAt);
-        _updateClassSessionStatus(classId, isActive);
-      } else {
-        _updateClassSessionStatus(classId, false);
-      }
-    });
+      bool hasActiveSession = false;
 
-    // Écouter les sessions dans l'ancien système
-    final sessionSubscription = FirebaseFirestore.instance
-        .collection('classes')
-        .doc(classId)
-        .collection('sessions')
-        .snapshots()
-        .listen((snapshot) {
-      final hasActiveSession = snapshot.docs.any((doc) {
-        final data = doc.data();
-        final isActive = data['isActive'] ?? false;
-        final isExpired = data['isExpired'] ?? false;
-        final qrCode = data['qrCode'] ?? '';
-        return isActive && !isExpired && qrCode.isNotEmpty;
-      });
+      if (snapshot.docs.isNotEmpty) {
+        final session = snapshot.docs.first;
+        final sessionData = session.data();
+        final expiresAt = (sessionData['expiresAt'] as Timestamp?)?.toDate();
+
+        // Vérifier si la session n'est pas expirée
+        hasActiveSession = expiresAt != null && DateTime.now().isBefore(expiresAt);
+
+        print('📡 Session détectée pour $classId: $hasActiveSession');
+        print('⏰ Expire à: $expiresAt');
+        if (expiresAt != null) {
+          final now = DateTime.now();
+          final remaining = expiresAt.difference(now).inMinutes;
+          print('⏱️ Temps restant: $remaining minutes');
+        }
+      } else {
+        print('📡 Aucune session active détectée pour $classId');
+      }
+
       _updateClassSessionStatus(classId, hasActiveSession);
     });
 
-    // Stocker les souscriptions pour pouvoir les annuler plus tard
+    // Stocker la souscription
     _sessionSubscriptions['$classId-attendance'] = attendanceSubscription;
-    _sessionSubscriptions['$classId-session'] = sessionSubscription;
   }
 
   void _updateClassSessionStatus(String classId, bool hasActiveSession) {
-    setState(() {
-      final classIndex = classes.indexWhere((c) => c['id'] == classId);
-      if (classIndex != -1) {
-        classes[classIndex]['hasActiveSession'] = hasActiveSession;
-      }
-    });
+    if (mounted) {
+      setState(() {
+        final classIndex = classes.indexWhere((c) => c['id'] == classId);
+        if (classIndex != -1) {
+          classes[classIndex]['hasActiveSession'] = hasActiveSession;
+          print('🔄 Mise à jour statut classe $classId: $hasActiveSession');
+        }
+      });
+      _debugSessionStatus();
+    }
+  }
+
+  void _debugSessionStatus() {
+    print('=== DEBUG SESSION STATUS ===');
+    for (var classe in classes) {
+      print('📋 ${classe['nom']} (${classe['id']}): ${classe['hasActiveSession'] ? 'ACTIVE ✅' : 'FERMÉE ❌'}');
+    }
+    print('============================');
   }
 
   @override

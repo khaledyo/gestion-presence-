@@ -37,6 +37,7 @@ class _StudentHistoryPageState extends State<StudentHistoryPage> {
   static const Color successColor = Color(0xFF10B981);
   static const Color warningColor = Color(0xFFF59E0B);
   static const Color errorColor = Color(0xFFEF4444);
+  static const Color eliminatedColor = Color(0xFFDC2626); // Couleur pour "Éliminé"
 
   @override
   void initState() {
@@ -300,17 +301,30 @@ class _StudentHistoryPageState extends State<StudentHistoryPage> {
     }
   }
 
-  Color _getAttendanceRateColor(double rate) {
+  Color _getAttendanceRateColor(double rate, int absentSessions) {
+    // Si 4 absences ou plus, utiliser la couleur "Éliminé"
+    if (absentSessions >= 4) return eliminatedColor;
     if (rate >= 80) return successColor;
     if (rate >= 60) return warningColor;
     return errorColor;
   }
 
-  String _getAttendanceStatus(double rate) {
+  String _getAttendanceStatus(double rate, int absentSessions) {
+    // Si 4 absences ou plus, afficher "Éliminé"
+    if (absentSessions >= 4) return 'Éliminé';
     if (rate >= 80) return 'Excellent';
     if (rate >= 60) return 'Satisfaisant';
     if (rate >= 40) return 'À améliorer';
     return 'Critique';
+  }
+
+  IconData _getAttendanceIcon(double rate, int absentSessions) {
+    // Si 4 absences ou plus, utiliser l'icône "block"
+    if (absentSessions >= 4) return Icons.block_rounded;
+    if (rate >= 80) return Icons.emoji_events_rounded;
+    if (rate >= 60) return Icons.thumb_up_rounded;
+    if (rate >= 40) return Icons.warning_amber_rounded;
+    return Icons.error_outline_rounded;
   }
 
   Widget _buildLoadingState() {
@@ -507,6 +521,10 @@ class _StudentHistoryPageState extends State<StudentHistoryPage> {
       int absentSessions,
       double attendanceRate,
       ) {
+    final statusColor = _getAttendanceRateColor(attendanceRate, absentSessions);
+    final statusText = _getAttendanceStatus(attendanceRate, absentSessions);
+    final statusIcon = _getAttendanceIcon(attendanceRate, absentSessions);
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
       decoration: BoxDecoration(
@@ -568,10 +586,10 @@ class _StudentHistoryPageState extends State<StudentHistoryPage> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: _getAttendanceRateColor(attendanceRate).withOpacity(0.1),
+                    color: statusColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: _getAttendanceRateColor(attendanceRate).withOpacity(0.3),
+                      color: statusColor.withOpacity(0.3),
                     ),
                   ),
                   child: Text(
@@ -579,7 +597,7 @@ class _StudentHistoryPageState extends State<StudentHistoryPage> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w800,
-                      color: _getAttendanceRateColor(attendanceRate),
+                      color: statusColor,
                     ),
                   ),
                 ),
@@ -602,10 +620,10 @@ class _StudentHistoryPageState extends State<StudentHistoryPage> {
                       ),
                     ),
                     Text(
-                      _getAttendanceStatus(attendanceRate),
+                      statusText,
                       style: TextStyle(
                         fontSize: 12,
-                        color: _getAttendanceRateColor(attendanceRate),
+                        color: statusColor,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -615,7 +633,7 @@ class _StudentHistoryPageState extends State<StudentHistoryPage> {
                 LinearProgressIndicator(
                   value: attendanceRate / 100,
                   backgroundColor: backgroundColor,
-                  color: _getAttendanceRateColor(attendanceRate),
+                  color: statusColor,
                   minHeight: 8,
                   borderRadius: BorderRadius.circular(4),
                 ),
@@ -627,7 +645,7 @@ class _StudentHistoryPageState extends State<StudentHistoryPage> {
               children: [
                 _buildStatItem(Icons.check_circle_rounded, '$presentSessions', 'Présences', successColor),
                 _buildStatItem(Icons.cancel_rounded, '$absentSessions', 'Absences', errorColor),
-                _buildStatItem(Icons.emoji_events_rounded, _getAttendanceStatus(attendanceRate), 'Statut', _getAttendanceRateColor(attendanceRate)),
+                _buildStatItem(statusIcon, statusText, 'Statut', statusColor),
               ],
             ),
           ],

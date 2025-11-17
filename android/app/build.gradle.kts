@@ -7,36 +7,44 @@ plugins {
 
 android {
     namespace = "com.example.presence_app"
-    compileSdk = 34  // ou flutter.compileSdkVersion
+    compileSdk = 36
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    sourceSets {
+        getByName("main") {
+            java.srcDirs("src/main/kotlin")
+        }
+    }
+
     defaultConfig {
         applicationId = "com.example.presence_app"
-        minSdk = flutter.minSdkVersion
-        targetSdk = 34
+        minSdk = flutter.minSdkVersion  // ou flutter.minSdkVersion si défini dans flutter.gradle
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
 
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
-    }
-
     buildTypes {
         release {
+            // TODO: Ajouter votre configuration de signature pour la release
             signingConfig = signingConfigs.getByName("debug")
         }
     }
 }
 
 flutter {
-    source = "../../"
+    source = "../.."
 }
 
 dependencies {
-    implementation(platform("com.google.firebase:firebase-bom:34.3.0"))
+    implementation(platform("com.google.firebase:firebase-bom:33.0.0"))
     implementation("com.google.firebase:firebase-analytics")
 }
