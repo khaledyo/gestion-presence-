@@ -67,8 +67,7 @@ Chaque utilisateur dispose de fonctionnalités adaptées à son rôle, facilitan
 <img width="200" alt="QR Code Page" src="https://github.com/user-attachments/assets/5c385487-6cc4-4f56-8d32-9ab42889f68e" />
 
 ### Espace Étudiant
-
-<img width="200" alt="image" src="https://github.com/user-attachments/assets/6b501a2d-4c49-45e6-bb68-2cfa599857a5" />
+<img  width="200" alt="image" src="https://github.com/user-attachments/assets/e471fb48-eecd-48ba-b10f-f13ec2fa9fe2" />
 <img width="200" alt="image" src="https://github.com/user-attachments/assets/02a511ce-17e2-499c-b782-7dd70bc59b3f" />
 <img width="200" alt="image" src="https://github.com/user-attachments/assets/a1770495-6e18-4919-b6a3-a00e4263b989" />
 
