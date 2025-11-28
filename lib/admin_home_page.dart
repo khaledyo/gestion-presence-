@@ -130,7 +130,7 @@ class AdminHomePage extends StatelessWidget {
                         ),
                         const SizedBox(height: 15),
 
-                        // Titre
+                        
                         const Text(
                           "Bienvenue Admin",
                           style: TextStyle(
