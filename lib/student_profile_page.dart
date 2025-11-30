@@ -1,9 +1,7 @@
 // lib/pages/student_profile_page.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
 import 'package:image_picker/image_picker.dart';
-
 import 'dart:async';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -27,7 +25,6 @@ class StudentProfilePage extends StatefulWidget {
 
 class _StudentProfilePageState extends State<StudentProfilePage> {
   static const Color primaryColor = Color(0xFF6366F1);
-
   static const Color backgroundColor = Color(0xFFF8FAFD);
   static const Color surfaceColor = Colors.white;
   static const Color textColor = Color(0xFF2D3748);
@@ -219,6 +216,22 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
     );
   }
 
+  // Fonction pour extraire les initiales du nom
+  String _getInitials(String name) {
+    if (name.isEmpty) return "?";
+
+    final names = name.trim().split(' ');
+    if (names.length == 1) {
+      // Si un seul mot, prendre les 2 premières lettres
+      return names[0].length >= 2
+          ? names[0].substring(0, 2).toUpperCase()
+          : names[0].toUpperCase();
+    } else {
+      // Si plusieurs mots, prendre la première lettre du premier et dernier mot
+      return (names[0][0] + names[names.length - 1][0]).toUpperCase();
+    }
+  }
+
   Widget _buildProfilePhotoSection() {
     return StatefulBuilder(
       builder: (context, setState) {
@@ -255,10 +268,10 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
                             );
                           },
                           errorBuilder: (context, error, stackTrace) {
-                            return _buildDefaultProfileAvatar();
+                            return _buildModernInitialsAvatar();
                           },
                         )
-                            : _buildDefaultProfileAvatar(),
+                            : _buildModernInitialsAvatar(),
                       ),
                     ),
                     Positioned(
@@ -303,16 +316,24 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
     );
   }
 
-  Widget _buildDefaultProfileAvatar() {
+  Widget _buildModernInitialsAvatar() {
+    final initials = _getInitials(widget.userName);
+
     return Container(
       decoration: BoxDecoration(
         color: primaryColor.withOpacity(0.1),
         shape: BoxShape.circle,
       ),
-      child: Icon(
-        Icons.person_outline_rounded,
-        size: 40,
-        color: primaryColor,
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            color: primaryColor,
+            fontSize: 28,
+            fontWeight: FontWeight.w700,
+            fontFamily: 'Roboto',
+          ),
+        ),
       ),
     );
   }

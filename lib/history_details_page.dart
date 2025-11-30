@@ -19,15 +19,17 @@ class HistoryDetailsPage extends StatefulWidget {
 class _HistoryDetailsPageState extends State<HistoryDetailsPage>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  Map<String, Map<String, dynamic>> _studentData = {};
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    // Optionnel: écouter les changements si nécessaire
     _tabController.addListener(() {
-      if (mounted) setState(() {}); // rebuild to show correct tab content
+      if (mounted) setState(() {});
     });
+    _loadStudentData();
   }
 
   @override
@@ -36,13 +38,74 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
     super.dispose();
   }
 
+  Future<void> _loadStudentData() async {
+    try {
+      // Gestion des types mixtes : Strings et Maps
+      final presentStudents = _extractStudentIds(widget.historyData['presentStudents'] ?? []);
+      final absentStudents = _extractStudentIds(widget.historyData['absentStudents'] ?? []);
+      final allStudentIds = {...presentStudents, ...absentStudents};
+
+      final Map<String, Map<String, dynamic>> studentData = {};
+
+      for (final studentId in allStudentIds) {
+        if (studentId.isNotEmpty) {
+          final userDoc = await _firestore.collection('users').doc(studentId).get();
+          if (userDoc.exists) {
+            final userData = userDoc.data() as Map<String, dynamic>?;
+            if (userData != null) {
+              studentData[studentId] = {
+                'name': userData['nom'] ?? 'Nom inconnu',
+                'email': userData['email'] ?? '',
+                'profilePicture': userData['profilePicture'] ?? '',
+                'identifier': userData['identifier'] ?? '',
+              };
+            }
+          }
+        }
+      }
+
+      setState(() {
+        _studentData = studentData;
+      });
+    } catch (e) {
+      print('Erreur chargement données étudiants: $e');
+    }
+  }
+
+  // Méthode pour extraire les IDs d'étudiants quel que soit le type
+  List<String> _extractStudentIds(dynamic studentsField) {
+    if (studentsField is List) {
+      final List studentList = studentsField;
+      final List<String> ids = [];
+
+      for (final item in studentList) {
+        if (item is String) {
+          // Cas 1: Liste de Strings (UIDs)
+          ids.add(item);
+        } else if (item is Map<String, dynamic>) {
+          // Cas 2: Liste de Maps avec un champ 'uid'
+          final uid = item['uid'] ?? item['id'];
+          if (uid is String) {
+            ids.add(uid);
+          }
+        }
+      }
+      return ids;
+    }
+    return [];
+  }
+
+  Map<String, dynamic>? _getStudentData(String studentId) {
+    return _studentData[studentId];
+  }
+
   @override
   Widget build(BuildContext context) {
     final historyData = widget.historyData;
-    final presentStudents =
-    List<Map<String, dynamic>>.from(historyData['presentStudents'] ?? []);
-    final absentStudents =
-    List<Map<String, dynamic>>.from(historyData['absentStudents'] ?? []);
+
+    // Utiliser la méthode d'extraction pour gérer les types mixtes
+    final presentStudentIds = _extractStudentIds(historyData['presentStudents'] ?? []);
+    final absentStudentIds = _extractStudentIds(historyData['absentStudents'] ?? []);
 
     final date = (historyData['date'] as Timestamp).toDate();
     final presentCount = historyData['presentCount'] ?? 0;
@@ -67,25 +130,20 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
         centerTitle: false,
       ),
 
-      // Scroll global unique
       body: SingleChildScrollView(
         physics: const BouncingScrollPhysics(),
         child: Padding(
           padding: const EdgeInsets.only(bottom: 20),
           child: Column(
             children: [
-              // header compact
               _buildHeader(historyData, date, presentCount, totalStudents, percentage),
-
               const SizedBox(height: 10),
 
-              // onglets + contenu (tout dans le même scroll)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Tab bar
                     Container(
                       decoration: BoxDecoration(
                         color: Colors.white,
@@ -126,7 +184,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
                               children: [
                                 const Icon(Icons.check_circle_rounded, size: 14),
                                 const SizedBox(width: 6),
-                                Text('Présents (${presentStudents.length})'),
+                                Text('Présents (${presentStudentIds.length})'),
                               ],
                             ),
                           ),
@@ -136,7 +194,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
                               children: [
                                 const Icon(Icons.cancel_rounded, size: 14),
                                 const SizedBox(width: 6),
-                                Text('Absents (${absentStudents.length})'),
+                                Text('Absents (${absentStudentIds.length})'),
                               ],
                             ),
                           ),
@@ -146,12 +204,11 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
 
                     const SizedBox(height: 12),
 
-                    // Contenu de l'onglet affiché inline — utilise AnimatedSwitcher pour une transition
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 250),
                       child: _tabController.index == 0
-                          ? _buildStudentListAsColumn(presentStudents, true)
-                          : _buildStudentListAsColumn(absentStudents, false),
+                          ? _buildStudentListAsColumn(presentStudentIds, true)
+                          : _buildStudentListAsColumn(absentStudentIds, false),
                     ),
                   ],
                 ),
@@ -163,7 +220,6 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
     );
   }
 
-  // header
   Widget _buildHeader(Map<String, dynamic> data, DateTime date,
       int presentCount, int totalStudents, int percentage) {
     return Container(
@@ -259,8 +315,8 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
     );
   }
 
-  // helpers to safely read historyData inside header (since build already extracted some)
   Map<String, dynamic> historyData() => widget.historyData;
+
   int totalPercentage() {
     final presentCount = widget.historyData['presentCount'] ?? 0;
     final totalStudents = widget.historyData['totalStudents'] ?? 0;
@@ -328,10 +384,9 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
     );
   }
 
-  // version that uses a shrinkWrapped ListView (so performance remains good for long lists)
   Widget _buildStudentListAsColumn(
-      List<Map<String, dynamic>> students, bool isPresent) {
-    if (students.isEmpty) {
+      List<String> studentIds, bool isPresent) {
+    if (studentIds.isEmpty) {
       return const Padding(
         padding: EdgeInsets.all(20),
         child: Center(
@@ -344,45 +399,78 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage>
     return ListView.builder(
       padding: const EdgeInsets.only(top: 12, bottom: 8),
       shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(), // important: pas de scroll interne
-      itemCount: students.length,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: studentIds.length,
       itemBuilder: (context, index) {
-        final student = students[index];
+        final studentId = studentIds[index];
+        final studentData = _getStudentData(studentId);
+
         return Card(
           elevation: 1.5,
           margin: const EdgeInsets.symmetric(vertical: 6),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: isPresent
-                  ? const Color(0xFF10B981)
-                  : const Color(0xFFEF4444),
-              child: Icon(
-                isPresent ? Icons.check_rounded : Icons.close_rounded,
-                color: Colors.white,
-              ),
-            ),
+            leading: _buildStudentAvatar(studentData?['profilePicture'], isPresent),
             title: Text(
-              student['name'] ?? 'Nom inconnu',
+              studentData?['name'] ?? 'Chargement...',
               style: const TextStyle(
                   fontWeight: FontWeight.w600, color: Color(0xFF1F2937)),
             ),
             subtitle: Text(
-              student['identifier'] ?? '',
+              studentData?['email'] ?? studentData?['identifier'] ?? studentId,
               style: const TextStyle(color: Color(0xFF6B7280)),
             ),
-            trailing: Text(
-              isPresent ? 'Présent' : 'Absent',
-              style: TextStyle(
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
                 color: isPresent
-                    ? const Color(0xFF10B981)
-                    : const Color(0xFFEF4444),
-                fontWeight: FontWeight.bold,
+                    ? const Color(0xFF10B981).withOpacity(0.1)
+                    : const Color(0xFFEF4444).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isPresent
+                      ? const Color(0xFF10B981).withOpacity(0.3)
+                      : const Color(0xFFEF4444).withOpacity(0.3),
+                ),
+              ),
+              child: Text(
+                isPresent ? 'Présent' : 'Absent',
+                style: TextStyle(
+                  color: isPresent ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
         );
       },
     );
+  }
+
+  Widget _buildStudentAvatar(String? photoUrl, bool isPresent) {
+    if (photoUrl != null && photoUrl.isNotEmpty) {
+      return CircleAvatar(
+        backgroundColor: isPresent
+            ? const Color(0xFF10B981).withOpacity(0.1)
+            : const Color(0xFFEF4444).withOpacity(0.1),
+        backgroundImage: NetworkImage(photoUrl),
+        onBackgroundImageError: (exception, stackTrace) {
+          // Fallback vers l'avatar par défaut en cas d'erreur
+        },
+      );
+    } else {
+      // Avatar par défaut avec icône
+      return CircleAvatar(
+        backgroundColor: isPresent
+            ? const Color(0xFF10B981).withOpacity(0.2)
+            : const Color(0xFFEF4444).withOpacity(0.2),
+        child: Icon(
+          isPresent ? Icons.person_rounded : Icons.person_outline_rounded,
+          color: isPresent ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+          size: 18,
+        ),
+      );
+    }
   }
 }

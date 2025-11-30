@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'classes_list_page.dart';
 import 'student_history_page.dart';
 import 'student_profile_page.dart';
+import 'dart:async';
 
 class DashboardEtudiant extends StatefulWidget {
   final String userName;
@@ -23,6 +24,8 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
   List<Map<String, dynamic>> _notifications = [];
   Set<String> _readNotifications = {};
   bool _isLoadingNotifications = true;
+  Timer? _notificationTimer;
+  Timer? _syncTimer;
 
   static const Color primaryColor = Color(0xFF6366F1);
   static const Color secondaryColor = Color(0xFF8B5CF6);
@@ -39,6 +42,65 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
     super.initState();
     _loadNotifications();
     _setupRealtimeNotifications();
+    _startNotificationTimer();
+  }
+
+  @override
+  void dispose() {
+    _notificationTimer?.cancel();
+    _syncTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startNotificationTimer() {
+    // Mettre à jour toutes les secondes pour un compte à rebours fluide
+    _notificationTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+      _updateNotificationTimers();
+    });
+
+    // Synchroniser avec Firestore toutes les 30 secondes
+    //_syncTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+    // _processActiveSessions(); // Recharger les données depuis Firestore
+    // });
+  }
+
+  void _updateNotificationTimers() {
+    if (_notifications.isEmpty) return;
+
+    final now = DateTime.now();
+    bool needsUpdate = false;
+
+    final updatedNotifications = _notifications.map((notification) {
+      final expiresAt = notification['expiresAt'] as DateTime;
+
+      // Calculer le temps restant de manière synchronisée
+      final remainingSeconds = expiresAt.difference(now).inSeconds;
+      final remainingMinutes = expiresAt.difference(now).inMinutes;
+
+      // S'assurer que le temps ne soit pas négatif
+      final clampedSeconds = remainingSeconds.clamp(0, 15 * 60);
+      final clampedMinutes = remainingMinutes.clamp(0, 15);
+
+      // Vérifier si le temps a changé significativement
+      final oldSeconds = notification['remainingSeconds'] as int? ?? 0;
+      if (clampedSeconds != oldSeconds) {
+        needsUpdate = true;
+      }
+
+      return {
+        ...notification,
+        'remainingTime': clampedMinutes,
+        'remainingSeconds': clampedSeconds,
+        'isExpired': clampedSeconds <= 0,
+      };
+    }).toList().where((notification) => !notification['isExpired']).toList();
+
+    // Mettre à jour l'état seulement si nécessaire
+    if (needsUpdate && mounted) {
+      setState(() {
+        _notifications = updatedNotifications;
+      });
+    }
   }
 
   void _loadNotifications() {
@@ -67,6 +129,7 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
           .get();
 
       final List<Map<String, dynamic>> activeNotifications = [];
+      final now = DateTime.now();
 
       for (final classDoc in classesSnapshot.docs) {
         final classData = classDoc.data();
@@ -82,40 +145,46 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
           final sessionData = sessionDoc.data();
           final expiresAt = (sessionData['expiresAt'] as Timestamp?)?.toDate();
 
-          if (expiresAt != null && DateTime.now().isBefore(expiresAt)) {
-            final teacherUid = classData['enseignantUid'];
-            String teacherName = 'Enseignant';
+          if (expiresAt != null) {
+            final remainingSeconds = expiresAt.difference(now).inSeconds;
+            final remainingMinutes = expiresAt.difference(now).inMinutes;
 
-            if (teacherUid != null) {
-              final teacherDoc = await FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(teacherUid)
-                  .get();
+            // Ne montrer que les sessions avec temps restant positif
+            if (remainingSeconds > 0) {
+              final teacherUid = classData['enseignantUid'];
+              String teacherName = 'Enseignant';
 
-              if (teacherDoc.exists) {
-                final teacherData = teacherDoc.data();
-                teacherName = teacherData?['nom'] ?? teacherData?['name'] ?? 'Enseignant';
+              if (teacherUid != null) {
+                final teacherDoc = await FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(teacherUid)
+                    .get();
+
+                if (teacherDoc.exists) {
+                  final teacherData = teacherDoc.data();
+                  teacherName = teacherData?['nom'] ?? teacherData?['name'] ?? 'Enseignant';
+                }
               }
+
+              final notificationId = '${classId}_${sessionDoc.id}';
+              final createdAt = (sessionData['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+              final isNew = DateTime.now().difference(createdAt).inMinutes < 5;
+
+              activeNotifications.add({
+                'id': notificationId,
+                'classId': classId,
+                'className': classData['nom'] ?? 'Cours sans nom',
+                'teacherName': teacherName,
+                'sessionId': sessionDoc.id,
+                'expiresAt': expiresAt,
+                'remainingTime': remainingMinutes.clamp(0, 15),
+                'remainingSeconds': remainingSeconds.clamp(0, 15 * 60),
+                'createdAt': createdAt,
+                'isNew': isNew && !_readNotifications.contains(notificationId),
+                'sessionCode': sessionData['sessionCode'] ?? '',
+                'totalDuration': 15 * 60, // 15 minutes en secondes
+              });
             }
-
-            final remainingMinutes = expiresAt.difference(DateTime.now()).inMinutes;
-            final notificationId = '${classId}_${sessionDoc.id}';
-
-            final createdAt = (sessionData['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
-            final isNew = DateTime.now().difference(createdAt).inMinutes < 5;
-
-            activeNotifications.add({
-              'id': notificationId,
-              'classId': classId,
-              'className': classData['nom'] ?? 'Cours sans nom',
-              'teacherName': teacherName,
-              'sessionId': sessionDoc.id,
-              'expiresAt': expiresAt,
-              'remainingTime': remainingMinutes,
-              'createdAt': createdAt,
-              'isNew': isNew && !_readNotifications.contains(notificationId),
-              'sessionCode': sessionData['sessionCode'] ?? '',
-            });
           }
         }
       }
@@ -208,187 +277,230 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
 
   // PANEL DE NOTIFICATIONS MODERNE
   Widget _buildNotificationsPanel() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('attendances')
-          .where('isClosed', isEqualTo: false)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasData) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _processActiveSessions();
+    return StatefulBuilder(
+      builder: (context, setModalState) {
+        // Timer pour rafraîchir l'interface du modal
+        Timer? modalTimer;
+
+        void startModalTimer() {
+          modalTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+            if (mounted) {
+              setModalState(() {}); // Forcer le rafraîchissement de l'UI
+            }
           });
         }
 
-        final unreadCount = _unreadNotificationCount;
-        final totalNotifications = _notifications.length;
+        // Démarrer le timer quand le modal s'ouvre
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          startModalTimer();
+        });
 
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.73,
-          margin: const EdgeInsets.fromLTRB(12, 12, 12, 42),
-          decoration: BoxDecoration(
-            color: surfaceColor,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.25),
-                blurRadius: 30,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              // POIGNÉE DRAGGABLE
-              Container(
-                padding: const EdgeInsets.only(top: 12, bottom: 8),
-                child: Container(
-                  width: 40,
-                  height: 4,
+        // Nettoyer le timer quand le modal se ferme
+        return WillPopScope(
+          onWillPop: () async {
+            modalTimer?.cancel();
+            return true;
+          },
+          child: Container(
+            height: MediaQuery.of(context).size.height * 0.73,
+            margin: const EdgeInsets.fromLTRB(12, 12, 12, 42),
+            decoration: BoxDecoration(
+              color: surfaceColor,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.25),
+                  blurRadius: 30,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                // POIGNÉE DRAGGABLE
+                Container(
+                  padding: const EdgeInsets.only(top: 12, bottom: 8),
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade400,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+
+                // EN-TÊTE AVEC TITRE ET ACTIONS
+                Container(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade400,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-
-              // EN-TÊTE AVEC TITRE ET ACTIONS
-              Container(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(color: Colors.grey.shade200, width: 1),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Text(
-                      'Sessions Actives',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: textPrimary,
-                      ),
+                    border: Border(
+                      bottom: BorderSide(color: Colors.grey.shade200, width: 1),
                     ),
-                    const SizedBox(width: 8),
-
-                    if (totalNotifications > 0)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: primaryColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          totalNotifications.toString(),
-                          style: TextStyle(
-                            color: primaryColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-
-                    const Spacer(),
-
-                    if (unreadCount > 0)
-                      TextButton(
-                        onPressed: _markAllAsRead,
-                        style: TextButton.styleFrom(
-                          foregroundColor: primaryColor,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        child: Text(
-                          'Tout lire',
-                          style: TextStyle(
-                            color: primaryColor,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: Icon(Icons.close_rounded, color: textSecondary, size: 20),
-                      padding: const EdgeInsets.all(4),
-                      constraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // LISTE DES NOTIFICATIONS
-              Expanded(
-                child: _isLoadingNotifications
-                    ? _buildLoadingNotifications()
-                    : _notifications.isEmpty
-                    ? _buildEmptyNotifications()
-                    : _buildNotificationsList(),
-              ),
-
-              // PIED DE PAGE
-              Container(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                decoration: BoxDecoration(
-                  border: Border(
-                    top: BorderSide(color: Colors.grey.shade100, width: 1),
                   ),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                        },
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: textSecondary,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
+                  child: Row(
+                    children: [
+                      Text(
+                        'Sessions Actives',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: textPrimary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+
+                      if (_notifications.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: primaryColor.withOpacity(0.1),
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          side: BorderSide(color: Colors.grey.shade300),
-                        ),
-                        child: const Text('Fermer'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ClassesListPage(userUid: widget.userUid),
+                          child: Text(
+                            _notifications.length.toString(),
+                            style: TextStyle(
+                              color: primaryColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
                             ),
-                          );
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: primaryColor,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
                           ),
-                          elevation: 0,
                         ),
-                        child: const Text('Scanner'),
+
+                      const Spacer(),
+
+                      if (_unreadNotificationCount > 0)
+                        TextButton(
+                          onPressed: _markAllAsRead,
+                          style: TextButton.styleFrom(
+                            foregroundColor: primaryColor,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Text(
+                            'Tout lire',
+                            style: TextStyle(
+                              color: primaryColor,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+
+                      IconButton(
+                        onPressed: () {
+                          modalTimer?.cancel();
+                          Navigator.pop(context);
+                        },
+                        icon: Icon(Icons.close_rounded, color: textSecondary, size: 20),
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(
+                          minWidth: 36,
+                          minHeight: 36,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+
+                // LISTE DES NOTIFICATIONS AVEC TIMER DYNAMIQUE
+                Expanded(
+                  child: _isLoadingNotifications
+                      ? _buildLoadingNotifications()
+                      : _notifications.isEmpty
+                      ? _buildEmptyNotifications()
+                      : _buildNotificationsListWithTimer(setModalState),
+                ),
+
+                // PIED DE PAGE
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      top: BorderSide(color: Colors.grey.shade100, width: 1),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () {
+                            modalTimer?.cancel();
+                            Navigator.pop(context);
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: textSecondary,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            side: BorderSide(color: Colors.grey.shade300),
+                          ),
+                          child: const Text('Fermer'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () {
+                            modalTimer?.cancel();
+                            Navigator.pop(context);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => ClassesListPage(userUid: widget.userUid),
+                              ),
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryColor,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: const Text('Scanner'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
+      },
+    );
+  }
+
+  // Nouvelle méthode pour la liste avec timer
+  Widget _buildNotificationsListWithTimer(void Function(void Function()) setModalState) {
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: _notifications.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final notification = _notifications[index];
+        final isNew = notification['isNew'] == true;
+
+        // Calculer le temps restant en temps réel
+        final expiresAt = notification['expiresAt'] as DateTime;
+        final now = DateTime.now();
+        final remainingSeconds = expiresAt.difference(now).inSeconds;
+        final remainingMinutes = expiresAt.difference(now).inMinutes;
+
+        // Mettre à jour la notification avec le temps actuel
+        final updatedNotification = {
+          ...notification,
+          'remainingTime': remainingMinutes,
+          'remainingSeconds': remainingSeconds,
+        };
+
+        return _buildNotificationItem(updatedNotification, isNew);
       },
     );
   }
@@ -488,8 +600,11 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
 
   Widget _buildNotificationItem(Map<String, dynamic> notification, bool isNew) {
     final remainingTime = notification['remainingTime'] as int;
-    final isExpiringSoon = remainingTime < 10;
-    final isUrgent = remainingTime < 3;
+    final remainingSeconds = notification['remainingSeconds'] as int;
+    final totalDuration = notification['totalDuration'] as int? ?? 15 * 60;
+
+    final isExpiringSoon = remainingTime < 5; // Réduit à 5 minutes
+    final isUrgent = remainingTime < 2; // Réduit à 2 minutes
 
     Color statusColor = successColor;
     String statusText = 'Disponible';
@@ -504,6 +619,14 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
       statusText = 'Bientôt terminé';
       statusIcon = Icons.access_time_rounded;
     }
+
+    // CORRECTION : Calculer le pourcentage de TEMPS RESTANT (décroissant)
+    final progressPercentage = (remainingSeconds / totalDuration).clamp(0.0, 1.0);
+
+    // Formater le temps en minutes:secondes
+    final minutes = (remainingSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (remainingSeconds % 60).toString().padLeft(2, '0');
+    final timeText = '$minutes:$seconds';
 
     return Material(
       borderRadius: BorderRadius.circular(16),
@@ -601,26 +724,34 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
 
                     const SizedBox(height: 8),
 
+                    // BARRE DE PROGRESSION CORRIGÉE - DÉCROISSANTE
                     Container(
                       height: 4,
                       decoration: BoxDecoration(
                         color: Colors.grey.shade200,
                         borderRadius: BorderRadius.circular(2),
                       ),
-                      child: Row(
+                      child: Stack(
                         children: [
-                          Expanded(
-                            flex: remainingTime,
+                          // Fond de la barre (gris)
+                          Container(
+                            width: double.infinity,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          // Barre de progression (colorée) - DÉCROISSANTE
+                          FractionallySizedBox(
+                            widthFactor: progressPercentage,
                             child: Container(
+                              height: 4,
                               decoration: BoxDecoration(
                                 color: statusColor,
                                 borderRadius: BorderRadius.circular(2),
                               ),
                             ),
-                          ),
-                          Expanded(
-                            flex: 15 - remainingTime.clamp(0, 15),
-                            child: const SizedBox(),
                           ),
                         ],
                       ),
@@ -628,13 +759,14 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
 
                     const SizedBox(height: 8),
 
+                    // TEMPS RESTANT EN TEMPS RÉEL
                     Row(
                       children: [
                         Icon(Icons.access_time_rounded,
                             size: 14, color: statusColor),
                         const SizedBox(width: 4),
                         Text(
-                          '$statusText • $remainingTime min',
+                          '$statusText • $timeText',
                           style: TextStyle(
                             color: statusColor,
                             fontSize: 12,
@@ -642,6 +774,13 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
                           ),
                         ),
                         const Spacer(),
+                        Text(
+                          '${(progressPercentage * 100).toStringAsFixed(0)}%',
+                          style: TextStyle(
+                            color: textSecondary,
+                            fontSize: 10,
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -668,16 +807,41 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
     });
   }
 
-  Widget _buildDefaultProfileAvatar(bool isSmallScreen) {
+  // Fonction pour extraire les initiales du nom
+  String _getInitials(String name) {
+    if (name.isEmpty) return "?";
+
+    final names = name.trim().split(' ');
+    if (names.length == 1) {
+      // Si un seul mot, prendre les 2 premières lettres
+      return names[0].length >= 2
+          ? names[0].substring(0, 2).toUpperCase()
+          : names[0].toUpperCase();
+    } else {
+      // Si plusieurs mots, prendre la première lettre du premier et dernier mot
+      return (names[0][0] + names[names.length - 1][0]).toUpperCase();
+    }
+  }
+
+  Widget _buildModernInitialsAvatar(bool isSmallScreen) {
+    final initials = _getInitials(widget.userName);
+    final fontSize = isSmallScreen ? 14.0 : 28.0;
+
     return Container(
       decoration: BoxDecoration(
         color: primaryColor.withOpacity(0.1),
         shape: BoxShape.circle,
       ),
-      child: Icon(
-        Icons.person_rounded,
-        color: primaryColor,
-        size: isSmallScreen ? 18 : 20,
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            color: primaryColor,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w700,
+            fontFamily: 'Roboto',
+          ),
+        ),
       ),
     );
   }
@@ -777,10 +941,10 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
                                 );
                               },
                               errorBuilder: (context, error, stackTrace) {
-                                return _buildDefaultProfileAvatar(true);
+                                return _buildModernInitialsAvatar(true);
                               },
                             )
-                                : _buildDefaultProfileAvatar(true),
+                                : _buildModernInitialsAvatar(true),
                           ),
                         );
                       },
@@ -1051,7 +1215,7 @@ class _DashboardEtudiantState extends State<DashboardEtudiant> {
         crossAxisCount: 2,
         crossAxisSpacing: 20,
         mainAxisSpacing: 20,
-        childAspectRatio: 0.8,
+        childAspectRatio: 0.65,
       ),
       children: [
         _build3DActionCard(

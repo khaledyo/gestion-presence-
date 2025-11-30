@@ -7,12 +7,14 @@ import 'dart:math';
 class SchoolClassSelection {
   final String id;
   final String name;
+  final String level; // Ajout du niveau
   final List<String> studentUids;
   bool isSelected;
 
   SchoolClassSelection({
     required this.id,
     required this.name,
+    required this.level,
     required this.studentUids,
     this.isSelected = false,
   });
@@ -51,6 +53,10 @@ class _CreateClassPageState extends State<CreateClassPage> {
   List<SchoolClassSelection> allSchoolClasses = [];
   SchoolClassSelection? _selectedClass;
   StreamSubscription<QuerySnapshot>? _classesSubscription;
+
+  // Nouveaux états pour la sélection par année
+  String? _selectedYear;
+  final List<String> _years = ['1ère année', '2ème année', '3ème année'];
 
   // Couleurs modernes
   final Color _primaryColor = const Color(0xFF1A237E);
@@ -108,6 +114,7 @@ class _CreateClassPageState extends State<CreateClassPage> {
     for (final doc in snapshot.docs) {
       final data = doc.data() as Map<String, dynamic>;
       final className = data['name'] ?? 'Classe sans nom';
+      final classLevel = data['level'] ?? 'Non spécifié'; // Récupérer le niveau
 
       List<String> studentUids = [];
       if (data['students'] != null && data['students'] is List) {
@@ -118,12 +125,13 @@ class _CreateClassPageState extends State<CreateClassPage> {
 
       final wasSelected = allSchoolClasses
           .firstWhere((c) => c.id == doc.id,
-          orElse: () => SchoolClassSelection(id: '', name: '', studentUids: []))
+          orElse: () => SchoolClassSelection(id: '', name: '', level: '', studentUids: []))
           .isSelected;
 
       updatedClasses.add(SchoolClassSelection(
         id: doc.id,
         name: className,
+        level: classLevel,
         studentUids: studentUids,
         isSelected: wasSelected,
       ));
@@ -171,53 +179,30 @@ class _CreateClassPageState extends State<CreateClassPage> {
         6, (_) => chars.codeUnitAt(random.nextInt(chars.length))));
   }
 
-  // CORRECTION : Session de 15 minutes exactement
-  Future<String> _generateInitialAttendanceSession(String classId, String className, DateTime dateDebut, DateTime dateFin) async {
-    final now = DateTime.now();
+  // Filtrage des classes par année et recherche
+  List<SchoolClassSelection> get filteredClasses {
+    List<SchoolClassSelection> filtered = allSchoolClasses;
 
-    // VÉRIFIER SI ON EST DANS LES HORAIRES DU COURS
-    final isDuringClass = now.isAfter(dateDebut) && now.isBefore(dateFin);
-
-    if (!isDuringClass) {
-      print('🕒 Hors horaire cours - Pas de session créée');
-      return ""; // Retourner une chaîne vide si hors horaire
+    // Filtrer par année sélectionnée
+    if (_selectedYear != null) {
+      filtered = filtered.where((c) => c.level == _selectedYear).toList();
     }
 
-    // CRÉER LA SESSION UNIQUEMENT SI DANS LES HORAIRES
-    final sessionId = "${classId}_${DateTime.now().millisecondsSinceEpoch}";
+    // Filtrer par recherche
+    if (searchClassQuery.isNotEmpty) {
+      final query = searchClassQuery.toLowerCase();
+      filtered = filtered.where((c) => c.name.toLowerCase().contains(query)).toList();
+    }
 
-    // CORRECTION : Toujours 15 minutes exactement
-    final sessionEnd = now.add(Duration(minutes: 15));
-
-    print('🕒 Création session depuis create_class: ${DateFormat('HH:mm').format(now)}');
-    print('⏰ Expiration session: ${DateFormat('HH:mm').format(sessionEnd)}');
-    print('⏱️ Durée totale: 15 minutes');
-
-    await FirebaseFirestore.instance
-        .collection('attendances')
-        .doc(sessionId)
-        .set({
-      'classId': classId,
-      'className': className,
-      'createdAt': Timestamp.now(),
-      'dateDebut': Timestamp.fromDate(dateDebut),
-      'dateFin': Timestamp.fromDate(dateFin),
-      'expiresAt': Timestamp.fromDate(sessionEnd), // ← CORRIGÉ : 15 minutes
-      'presentStudentsUid': [],
-      'isClosed': false,
-      'sessionCode': _generateSessionCode(),
-      'sessionDuration': 15, // Durée fixe de 15 minutes
-    });
-
-    return sessionId;
+    return filtered;
   }
 
-  List<SchoolClassSelection> get filteredClasses {
-    if (searchClassQuery.isEmpty) return allSchoolClasses;
-    final query = searchClassQuery.toLowerCase();
-    return allSchoolClasses
-        .where((c) => c.name.toLowerCase().contains(query))
-        .toList();
+  // Réinitialiser la sélection quand l'année change
+  void _onYearChanged(String? newYear) {
+    setState(() {
+      _selectedYear = newYear;
+      _selectedClass = null; // Réinitialiser la sélection de classe
+    });
   }
 
   void _selectClass(SchoolClassSelection selectedClass) {
@@ -376,14 +361,6 @@ class _CreateClassPageState extends State<CreateClassPage> {
     );
 
     try {
-      // CORRECTION : Générer la session UNIQUEMENT si dans les horaires
-      final sessionId = await _generateInitialAttendanceSession(
-        _selectedClass!.id,
-        _nomCtrl.text.trim(),
-        dateDebut,
-        dateFin,
-      );
-
       final classData = {
         'nom': _nomCtrl.text.trim(),
         'jour': DateFormat('dd/MM/yyyy').format(_selectedDate!),
@@ -399,12 +376,9 @@ class _CreateClassPageState extends State<CreateClassPage> {
         'schoolClass': _selectedClass!.name,
         'schoolClassId': _selectedClass!.id,
         'createdAt': FieldValue.serverTimestamp(),
+        'todaySessionHappened': false,
+        'sessionCompletedForTimeSlot': false,
       };
-
-      // Ajouter l'ID de session seulement si créé
-      if (sessionId.isNotEmpty) {
-        classData['attendanceSessionId'] = sessionId;
-      }
 
       await FirebaseFirestore.instance.collection('classes').add(classData);
 
@@ -414,9 +388,11 @@ class _CreateClassPageState extends State<CreateClassPage> {
         final isDuringClass = now.isAfter(dateDebut) && now.isBefore(dateFin);
 
         if (isDuringClass) {
-          _showSnackBar('Séance créée avec succès 🎉 - QR Code activé');
+          _showSnackBar('Séance créée avec succès 🎉 - QR Code disponible');
+        } else if (now.isBefore(dateDebut)) {
+          _showSnackBar('Séance créée avec succès 🎉 - QR Code disponible à l\'heure du cours');
         } else {
-          _showSnackBar('Séance créée avec succès 🎉 - QR Code activera à l\'heure du cours');
+          _showSnackBar('Séance créée avec succès 🎉');
         }
         Navigator.pop(context);
       }
@@ -425,7 +401,7 @@ class _CreateClassPageState extends State<CreateClassPage> {
       _showSnackBar('Erreur lors de la création: $e');
     }
   }
-  // ... (le reste du code reste identique - _buildIconPicker, _buildClassCard, build, etc.)
+
   Widget _buildIconPicker() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -528,12 +504,32 @@ class _CreateClassPageState extends State<CreateClassPage> {
                         ),
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        '${schoolClass.studentUids.length} étudiant${schoolClass.studentUids.length > 1 ? 's' : ''}',
-                        style: TextStyle(
-                          color: _hintColor,
-                          fontSize: 13,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            '${schoolClass.studentUids.length} étudiant${schoolClass.studentUids.length > 1 ? 's' : ''}',
+                            style: TextStyle(
+                              color: _hintColor,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _primaryColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              schoolClass.level,
+                              style: TextStyle(
+                                color: _primaryColor,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -771,6 +767,36 @@ class _CreateClassPageState extends State<CreateClassPage> {
                         ),
                         const SizedBox(height: 16),
 
+                        // Sélection de l'année
+                        DropdownButtonFormField<String>(
+                          decoration: InputDecoration(
+                            labelText: 'Filtrer par année',
+                            labelStyle: TextStyle(color: _hintColor),
+                            filled: true,
+                            fillColor: _backgroundColor,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none,
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                          ),
+                          value: _selectedYear,
+                          items: [
+                            DropdownMenuItem(
+                              value: null,
+                              child: Text('Toutes les années', style: TextStyle(color: _hintColor)),
+                            ),
+                            ..._years.map((year) {
+                              return DropdownMenuItem(
+                                value: year,
+                                child: Text(year),
+                              );
+                            }).toList(),
+                          ],
+                          onChanged: _onYearChanged,
+                        ),
+                        const SizedBox(height: 16),
+
                         if (_selectedClass != null)
                           Container(
                             padding: const EdgeInsets.all(16),
@@ -795,12 +821,32 @@ class _CreateClassPageState extends State<CreateClassPage> {
                                           fontSize: 15,
                                         ),
                                       ),
-                                      Text(
-                                        '${_selectedClass!.studentUids.length} étudiant${_selectedClass!.studentUids.length > 1 ? 's' : ''}',
-                                        style: TextStyle(
-                                          color: _primaryColor.withOpacity(0.8),
-                                          fontSize: 13,
-                                        ),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            '${_selectedClass!.studentUids.length} étudiant${_selectedClass!.studentUids.length > 1 ? 's' : ''}',
+                                            style: TextStyle(
+                                              color: _primaryColor.withOpacity(0.8),
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: _primaryColor.withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              _selectedClass!.level,
+                                              style: TextStyle(
+                                                color: _primaryColor,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
@@ -831,6 +877,25 @@ class _CreateClassPageState extends State<CreateClassPage> {
                         ),
                         const SizedBox(height: 16),
 
+                        if (_selectedYear != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              children: [
+                                Icon(Icons.filter_alt_rounded, size: 16, color: _primaryColor),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Filtré: $_selectedYear',
+                                  style: TextStyle(
+                                    color: _primaryColor,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
                         _isLoadingClasses
                             ? Center(
                           child: Padding(
@@ -856,8 +921,11 @@ class _CreateClassPageState extends State<CreateClassPage> {
                                 Icon(Icons.search_off_rounded, size: 40, color: _hintColor),
                                 const SizedBox(height: 8),
                                 Text(
-                                  'Aucune classe trouvée',
+                                  _selectedYear != null
+                                      ? 'Aucune classe trouvée en $_selectedYear'
+                                      : 'Aucune classe trouvée',
                                   style: TextStyle(color: _hintColor, fontSize: 14),
+                                  textAlign: TextAlign.center,
                                 ),
                               ],
                             ),

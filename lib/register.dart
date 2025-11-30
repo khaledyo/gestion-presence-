@@ -17,6 +17,7 @@ class _MyRegisterState extends State<MyRegister> {
   final TextEditingController _passwordController = TextEditingController();
 
   String? _selectedRole;
+  String? _selectedYear;
   String? _selectedClass;
   bool _isLoading = false;
 
@@ -26,6 +27,9 @@ class _MyRegisterState extends State<MyRegister> {
   final Color _errorColor = Color(0xFF1A237E);
   final Color _backgroundColor = Colors.white;
   final Color _textColor = Color(0xFF424242);
+
+  // Liste des années
+  final List<String> _years = ['1ère année', '2ème année', '3ème année'];
 
   // Méthode pour gérer les erreurs Firebase
   String _getErrorMessage(FirebaseAuthException e) {
@@ -154,9 +158,15 @@ class _MyRegisterState extends State<MyRegister> {
     }
 
     // Validation spécifique pour les étudiants
-    if (_selectedRole == 'Étudiant' && _selectedClass == null) {
-      _showMessage("Sélectionnez une classe 😅", isError: true);
-      return;
+    if (_selectedRole == 'Étudiant') {
+      if (_selectedYear == null) {
+        _showMessage("Sélectionnez une année 😅", isError: true);
+        return;
+      }
+      if (_selectedClass == null) {
+        _showMessage("Sélectionnez une classe 😅", isError: true);
+        return;
+      }
     }
 
     // Validation du mot de passe
@@ -256,6 +266,122 @@ class _MyRegisterState extends State<MyRegister> {
           borderRadius: BorderRadius.circular(10),
         ),
       ),
+    );
+  }
+
+  // Réinitialiser la sélection de classe quand l'année change
+  void _onYearChanged(String? newYear) {
+    setState(() {
+      _selectedYear = newYear;
+      _selectedClass = null; // Réinitialiser la sélection de classe
+    });
+  }
+
+  // 🔥 CORRECTION : Méthode simplifiée pour récupérer les classes
+  Widget _buildClassDropdown() {
+    return FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('school_classes')
+          .where('level', isEqualTo: _selectedYear)
+          .get(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return DropdownButtonFormField<String>(
+            decoration: InputDecoration(
+              labelText: "Chargement des classes...",
+              labelStyle: TextStyle(color: _primaryColor),
+              filled: true,
+              fillColor: Colors.grey.shade100,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding:
+              const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+            ),
+            items: const [],
+            onChanged: null,
+          );
+        }
+
+        if (snapshot.hasError) {
+          print("Erreur Firestore: ${snapshot.error}");
+          return DropdownButtonFormField<String>(
+            decoration: InputDecoration(
+              labelText: "Erreur de chargement",
+              labelStyle: TextStyle(color: _primaryColor),
+              filled: true,
+              fillColor: Colors.grey.shade100,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding:
+              const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+            ),
+            items: const [],
+            onChanged: null,
+          );
+        }
+
+        final classes = snapshot.data?.docs ?? [];
+
+        if (classes.isEmpty) {
+          return DropdownButtonFormField<String>(
+            decoration: InputDecoration(
+              labelText: "Aucune classe disponible pour cette année",
+              labelStyle: TextStyle(color: _primaryColor),
+              filled: true,
+              fillColor: Colors.grey.shade100,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding:
+              const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+            ),
+            items: const [],
+            onChanged: null,
+          );
+        }
+
+        // Trier les classes par nom côté client
+        classes.sort((a, b) {
+          final aName = (a.data() as Map<String, dynamic>)['name'] ?? '';
+          final bName = (b.data() as Map<String, dynamic>)['name'] ?? '';
+          return aName.compareTo(bName);
+        });
+
+        return DropdownButtonFormField<String>(
+          decoration: InputDecoration(
+            labelText: "Classe *",
+            labelStyle: TextStyle(color: _primaryColor),
+            filled: true,
+            fillColor: Colors.grey.shade100,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(15),
+              borderSide: BorderSide.none,
+            ),
+            contentPadding:
+            const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+          ),
+          value: _selectedClass,
+          items: classes.map((doc) {
+            final classData = doc.data() as Map<String, dynamic>;
+            final className = classData['name'] ?? 'Classe sans nom';
+
+            return DropdownMenuItem(
+              value: doc.id,
+              child: Text(className),
+            );
+          }).toList(),
+          onChanged: _isLoading ? null : (value) {
+            setState(() {
+              _selectedClass = value;
+            });
+          },
+        );
+      },
     );
   }
 
@@ -426,6 +552,7 @@ class _MyRegisterState extends State<MyRegister> {
                   setState(() {
                     _selectedRole = value;
                     if (value != 'Étudiant') {
+                      _selectedYear = null;
                       _selectedClass = null;
                     }
                   });
@@ -433,102 +560,36 @@ class _MyRegisterState extends State<MyRegister> {
               ),
               const SizedBox(height: 15),
 
-              // Sélection de la classe (uniquement pour les étudiants)
+              // Sélection de l'année (uniquement pour les étudiants)
               if (_selectedRole == 'Étudiant') ...[
-                StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('school_classes')
-                      .orderBy('createdAt', descending: false)
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return DropdownButtonFormField<String>(
-                        decoration: InputDecoration(
-                          labelText: "Erreur de chargement",
-                          labelStyle: TextStyle(color: _primaryColor),
-                          filled: true,
-                          fillColor: Colors.grey.shade100,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(15),
-                            borderSide: BorderSide.none,
-                          ),
-                          contentPadding:
-                          const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                        ),
-                        items: const [],
-                        onChanged: null,
-                      );
-                    }
-
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return DropdownButtonFormField<String>(
-                        decoration: InputDecoration(
-                          labelText: "Chargement...",
-                          labelStyle: TextStyle(color: _primaryColor),
-                          filled: true,
-                          fillColor: Colors.grey.shade100,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(15),
-                            borderSide: BorderSide.none,
-                          ),
-                          contentPadding:
-                          const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                        ),
-                        items: const [],
-                        onChanged: null,
-                      );
-                    }
-
-                    final classes = snapshot.data?.docs ?? [];
-
-                    if (classes.isEmpty) {
-                      return DropdownButtonFormField<String>(
-                        decoration: InputDecoration(
-                          labelText: "Aucune classe",
-                          labelStyle: TextStyle(color: _primaryColor),
-                          filled: true,
-                          fillColor: Colors.grey.shade100,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(15),
-                            borderSide: BorderSide.none,
-                          ),
-                          contentPadding:
-                          const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                        ),
-                        items: const [],
-                        onChanged: null,
-                      );
-                    }
-
-                    return DropdownButtonFormField<String>(
-                      decoration: InputDecoration(
-                        labelText: "Classe *",
-                        labelStyle: TextStyle(color: _primaryColor),
-                        filled: true,
-                        fillColor: Colors.grey.shade100,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(15),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding:
-                        const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                      ),
-                      value: _selectedClass,
-                      items: classes.map((doc) {
-                        final className = (doc.data() as Map<String, dynamic>)['name'] ?? 'Classe sans nom';
-                        return DropdownMenuItem(
-                          value: doc.id,
-                          child: Text(className),
-                        );
-                      }).toList(),
-                      onChanged: _isLoading ? null : (value) {
-                        setState(() {
-                          _selectedClass = value;
-                        });
-                      },
+                DropdownButtonFormField<String>(
+                  decoration: InputDecoration(
+                    labelText: "Année *",
+                    labelStyle: TextStyle(color: _primaryColor),
+                    filled: true,
+                    fillColor: Colors.grey.shade100,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(15),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding:
+                    const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                  ),
+                  value: _selectedYear,
+                  items: _years.map((year) {
+                    return DropdownMenuItem(
+                      value: year,
+                      child: Text(year),
                     );
-                  },
+                  }).toList(),
+                  onChanged: _isLoading ? null : _onYearChanged,
                 ),
+                const SizedBox(height: 15),
+              ],
+
+              // Sélection de la classe (uniquement pour les étudiants avec année sélectionnée)
+              if (_selectedRole == 'Étudiant' && _selectedYear != null) ...[
+                _buildClassDropdown(),
                 const SizedBox(height: 15),
               ],
 

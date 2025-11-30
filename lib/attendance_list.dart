@@ -4,16 +4,40 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
 import 'dart:math';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// Couleurs modernes
+// Couleurs modernes avec dégradés
 const Color primaryColor = Color(0xFF6366F1);
+const Color primaryDark = Color(0xFF4F46E5);
+const Color primaryLight = Color(0xFF818CF8);
 const Color backgroundColor = Color(0xFFF8FAFC);
-const Color surfaceColor = Colors.white;
+const Color surfaceColor = Color(0xFFFFFFFF);
 const Color successColor = Color(0xFF10B981);
+const Color successDark = Color(0xFF059669);
 const Color errorColor = Color(0xFFEF4444);
 const Color warningColor = Color(0xFFF59E0B);
 const Color textPrimary = Color(0xFF1F2937);
 const Color textSecondary = Color(0xFF6B7280);
+const Color cardShadowColor = Color(0x0A000000);
+
+// Dégradés modernes
+const LinearGradient primaryGradient = LinearGradient(
+  colors: [primaryColor, primaryDark],
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+);
+
+const LinearGradient successGradient = LinearGradient(
+  colors: [successColor, successDark],
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+);
+
+const LinearGradient cardGradient = LinearGradient(
+  colors: [Color(0xFFF8FAFC), Color(0xFFF1F5F9)],
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+);
 
 // Enum pour gérer les états de session
 enum SessionStatus {
@@ -22,17 +46,21 @@ enum SessionStatus {
   duringClass,
   afterClass,
   qrCodeActive,
+  teacherAbsent,
+  classCanceled,
 }
 
 class Student {
   final String uid;
   final String fullName;
   final String studentIdentifier;
+  final String? photoUrl;
 
   Student({
     required this.uid,
     required this.fullName,
     required this.studentIdentifier,
+    this.photoUrl,
   });
 }
 
@@ -58,13 +86,13 @@ class _AttendanceListState extends State<AttendanceList> {
   bool isSessionClosed = false;
   String searchQuery = '';
   Timer? _sessionTimer;
+  Timer? _syncTimer;
   int _remainingTime = 0;
   SessionStatus _sessionStatus = SessionStatus.loading;
   bool _canStartQRSession = false;
-  bool _hasSessionHappenedInThisTimeSlot = false; // NOUVEAU: Stocker l'état local par créneau
+  bool _hasSessionHappenedInThisTimeSlot = false;
 
-  // Durée de validité du QR code fixée à 15 minutes
-  final int _qrCodeDuration = 15 * 60; // 15 minutes en secondes
+  final int _qrCodeDuration = 15 * 60;
 
   @override
   void initState() {
@@ -75,6 +103,7 @@ class _AttendanceListState extends State<AttendanceList> {
   @override
   void dispose() {
     _sessionTimer?.cancel();
+    _syncTimer?.cancel();
     super.dispose();
   }
 
@@ -85,14 +114,11 @@ class _AttendanceListState extends State<AttendanceList> {
         isLoading = true;
       });
 
-      // Charger les étudiants en premier
       await _loadStudents();
-
-      // Vérifier si une session a déjà eu lieu dans ce créneau horaire
+      _resetAttendanceState();
       _hasSessionHappenedInThisTimeSlot = await _hasSessionAlreadyHappenedInThisTimeSlot();
-
-      // Vérifier l'horaire du cours et l'état de la session
       await _checkClassScheduleAndSession();
+      _startSyncTimer();
 
     } catch (e) {
       print("Erreur d'initialisation: $e");
@@ -104,10 +130,39 @@ class _AttendanceListState extends State<AttendanceList> {
     }
   }
 
+  void _startSyncTimer() {
+    _syncTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+      if (sessionId != null && !isSessionClosed) {
+        _syncSessionTime();
+      }
+    });
+  }
+
+  Future<void> _syncSessionTime() async {
+    if (sessionId == null) return;
+
+    try {
+      final sessionDoc = await FirebaseFirestore.instance
+          .collection('attendances')
+          .doc(sessionId!)
+          .get();
+
+      if (sessionDoc.exists) {
+        final sessionData = sessionDoc.data()!;
+        final expiresAt = sessionData['expiresAt'] as Timestamp;
+
+        setState(() {
+          _remainingTime = _calculateRemainingTime(expiresAt);
+        });
+      }
+    } catch (e) {
+      print('Erreur synchronisation temps: $e');
+    }
+  }
+
   Future<void> _checkClassScheduleAndSession() async {
     final now = DateTime.now();
 
-    // Récupérer les données de la classe
     final classDoc = await FirebaseFirestore.instance
         .collection('classes')
         .doc(widget.classId)
@@ -118,8 +173,6 @@ class _AttendanceListState extends State<AttendanceList> {
     }
 
     final classData = classDoc.data() ?? {};
-
-    // Vérifier s'il existe une session de présence active
     final existingSessionId = classData['attendanceSessionId'] as String?;
 
     if (existingSessionId != null) {
@@ -134,29 +187,23 @@ class _AttendanceListState extends State<AttendanceList> {
         final expiresAt = (sessionData['expiresAt'] as Timestamp?)?.toDate();
 
         if (!isClosed && expiresAt != null && now.isBefore(expiresAt)) {
-          // Session active trouvée - la réutiliser
           sessionId = existingSessionId;
-          _remainingTime = expiresAt.difference(now).inSeconds;
+          _remainingTime = _calculateRemainingTime(sessionData['expiresAt'] as Timestamp);
           _sessionStatus = SessionStatus.qrCodeActive;
           _startSessionTimer();
-
-          // Charger les présences existantes
           _loadExistingAttendance(sessionData);
 
-          // DÉSACTIVER LE BOUTON POUR DÉMARRER UN NOUVEAU QR
           setState(() {
             isLoading = false;
             _canStartQRSession = false;
           });
           return;
         } else if (!isClosed && expiresAt != null && now.isAfter(expiresAt)) {
-          // Session expirée - sauvegarder et fermer
           await _saveToHistoryAndCloseSession(existingSessionId);
         }
       }
     }
 
-    // Vérifier l'horaire du cours pour déterminer l'état
     await _checkClassTiming(classData);
   }
 
@@ -182,37 +229,29 @@ class _AttendanceListState extends State<AttendanceList> {
       if (!classDoc.exists) return false;
 
       final classData = classDoc.data()!;
-
-      // Vérifier si une session a déjà été complétée pour ce créneau horaire
       final sessionCompletedForTimeSlot = classData['sessionCompletedForTimeSlot'] ?? false;
-      if (sessionCompletedForTimeSlot) {
-        // Vérifier si c'est le même créneau horaire
-        final lastSessionHoraire = classData['lastSessionHoraire'] as String?;
-        final currentHoraire = widget.classData['horaireDebut'] as String?;
 
-        if (lastSessionHoraire == currentHoraire) {
-          return true; // Même créneau horaire, session déjà faite
-        }
-      }
-
-      // Vérifier la date de la dernière session et l'horaire
-      final lastSessionDate = classData['lastSessionDate'] as Timestamp?;
       final lastSessionHoraire = classData['lastSessionHoraire'] as String?;
       final currentHoraire = widget.classData['horaireDebut'] as String?;
 
+      final lastSessionDate = classData['lastSessionDate'] as Timestamp?;
+      final today = DateTime.now();
+
       if (lastSessionDate != null && lastSessionHoraire != null && currentHoraire != null) {
         final lastSession = lastSessionDate.toDate();
-        final today = DateTime.now();
 
-        // Comparer les dates (jour/mois/année seulement)
         final isSameDay = lastSession.year == today.year &&
             lastSession.month == today.month &&
             lastSession.day == today.day;
 
-        // Vérifier si c'est le même créneau horaire
         final isSameTimeSlot = lastSessionHoraire == currentHoraire;
 
-        return isSameDay && isSameTimeSlot;
+        if (isSameDay && isSameTimeSlot) {
+          return true;
+        } else {
+          _resetAttendanceState();
+          return false;
+        }
       }
 
       return false;
@@ -222,13 +261,23 @@ class _AttendanceListState extends State<AttendanceList> {
     }
   }
 
+  void _resetAttendanceState() {
+    setState(() {
+      attendanceStatus = {
+        for (var student in enrolledStudents) student.uid: false,
+      };
+      _hasSessionHappenedInThisTimeSlot = false;
+      sessionId = null;
+      isSessionClosed = false;
+    });
+    print("🔄 État de présence réinitialisé pour nouveau créneau horaire");
+  }
+
   Future<void> _checkClassTiming(Map<String, dynamic> classData) async {
     final now = DateTime.now();
-
     DateTime? dateDebut;
     DateTime? dateFin;
 
-    // Récupérer les dates de début et fin
     if (classData['dateDebut'] != null && classData['dateFin'] != null) {
       dateDebut = (classData['dateDebut'] as Timestamp).toDate();
       dateFin = (classData['dateFin'] as Timestamp).toDate();
@@ -257,12 +306,16 @@ class _AttendanceListState extends State<AttendanceList> {
     int newRemainingTime = 0;
     bool canStartQR = false;
 
-    // UTILISER LA VARIABLE LOCALE AU LIEU D'APPELER LA MÉTHODE DIRECTEMENT
+    final currentHoraire = widget.classData['horaireDebut'] as String?;
+    final lastSessionHoraire = classData['lastSessionHoraire'] as String?;
+
+    if (currentHoraire != null && lastSessionHoraire != null && currentHoraire != lastSessionHoraire) {
+      _resetAttendanceState();
+    }
+
     if (_hasSessionHappenedInThisTimeSlot) {
-      // Une session a déjà eu lieu dans ce créneau horaire - EMPÊCHER TOUTE NOUVELLE SESSION
       newStatus = SessionStatus.afterClass;
       canStartQR = false;
-      print('🚫 Session déjà effectuée pour ce créneau horaire - Nouvelle session bloquée');
     }
     else if (dateDebut != null && dateFin != null) {
       final isBeforeClass = now.isBefore(dateDebut);
@@ -270,21 +323,25 @@ class _AttendanceListState extends State<AttendanceList> {
       final isAfterClass = now.isAfter(dateFin);
 
       if (isBeforeClass) {
-        // AVANT le cours - ATTENDRE l'heure exacte
         newStatus = SessionStatus.beforeClass;
         newRemainingTime = dateDebut.difference(now).inSeconds;
         _startPreSessionTimer();
       } else if (isDuringClass) {
-        // PENDANT le cours - L'ENSEIGNANT PEUT DÉMARRER LE QR CODE
-        // MAIS SEULEMENT SI AUCUNE SESSION N'EST ACTIVE
         newStatus = SessionStatus.duringClass;
-        canStartQR = sessionId == null; // SEULEMENT SI PAS DE SESSION ACTIVE
+        canStartQR = sessionId == null;
       } else if (isAfterClass) {
-        // APRÈS le cours
-        newStatus = SessionStatus.afterClass;
+        final isCanceled = classData['isCanceled'] ?? false;
+
+        if (isCanceled) {
+          newStatus = SessionStatus.classCanceled;
+        } else if (!_hasSessionHappenedInThisTimeSlot && sessionId == null) {
+          newStatus = SessionStatus.teacherAbsent;
+          _notifyStudentsAboutTeacherAbsence(classData);
+        } else {
+          newStatus = SessionStatus.afterClass;
+        }
       }
     } else {
-      // Pas d'heures définies
       newStatus = SessionStatus.afterClass;
     }
 
@@ -296,45 +353,53 @@ class _AttendanceListState extends State<AttendanceList> {
     });
   }
 
-  Future<bool> _checkIfSessionAlreadyActive() async {
+  Future<void> _notifyStudentsAboutTeacherAbsence(Map<String, dynamic> classData) async {
     try {
-      final classDoc = await FirebaseFirestore.instance
-          .collection('classes')
-          .doc(widget.classId)
-          .get();
+      final classId = widget.classId;
+      final today = DateTime.now().toIso8601String().split('T')[0];
+      final notificationKey = 'absence_notification_${classId}_$today';
 
-      final existingSessionId = classDoc.data()?['attendanceSessionId'] as String?;
+      final prefs = await SharedPreferences.getInstance();
+      final alreadyNotified = prefs.getBool(notificationKey) ?? false;
 
-      if (existingSessionId != null) {
-        final sessionDoc = await FirebaseFirestore.instance
-            .collection('attendances')
-            .doc(existingSessionId)
-            .get();
+      if (alreadyNotified) return;
 
-        if (sessionDoc.exists) {
-          final sessionData = sessionDoc.data()!;
-          final isClosed = sessionData['isClosed'] ?? false;
-          final expiresAt = (sessionData['expiresAt'] as Timestamp?)?.toDate();
+      final className = classData['nom'] ?? 'Séance sans nom';
+      final teacherName = classData['enseignantName'] ?? 'Le professeur';
+      final startTime = classData['horaireDebut'] ?? '';
+      final endTime = classData['horaireFin'] ?? '';
+      final studentsUid = List<String>.from(classData['studentsUid'] ?? []);
 
-          return !isClosed && expiresAt != null && DateTime.now().isBefore(expiresAt);
-        }
-      }
+      if (studentsUid.isEmpty) return;
 
-      return false;
+      final notificationData = {
+        'type': 'teacher_absence',
+        'classId': classId,
+        'className': className,
+        'teacherName': teacherName,
+        'teacherUid': widget.classData['enseignantUid'],
+        'date': Timestamp.now(),
+        'timeSlot': '$startTime - $endTime',
+        'message': '$teacherName était absent pour le cours "$className"',
+        'forStudents': studentsUid,
+        'isRead': {},
+        'createdAt': Timestamp.now(),
+      };
+
+      await FirebaseFirestore.instance.collection('notifications').add(notificationData);
+      await prefs.setBool(notificationKey, true);
+
     } catch (e) {
-      print("Erreur vérification session: $e");
-      return false;
+      print('❌ Erreur envoi notification absence: $e');
     }
   }
 
   Future<void> _startQRSession() async {
-    // VÉRIFIER SI UNE SESSION A DÉJÀ EU LIEU DANS CE CRÉNEAU HORAIRE
     if (_hasSessionHappenedInThisTimeSlot) {
       _showSnackBar('Une session a déjà été effectuée pour ce créneau horaire aujourd\'hui', warningColor);
       return;
     }
 
-    // EMPÊCHER LE DÉMARRAGE MULTIPLE
     if (!_canStartQRSession || sessionId != null) {
       _showSnackBar('Une session est déjà active', warningColor);
       return;
@@ -343,14 +408,13 @@ class _AttendanceListState extends State<AttendanceList> {
     try {
       final newSessionId = "${widget.classId}_${DateTime.now().millisecondsSinceEpoch}";
       final now = DateTime.now();
+      final sessionEnd = now.add(Duration(minutes: 15));
 
-      // VÉRIFIER UNE DERNIÈRE FOIS AVANT DE CRÉER
       final classDoc = await FirebaseFirestore.instance
           .collection('classes')
           .doc(widget.classId)
           .get();
 
-      // Vérifier si une session a déjà eu lieu dans ce créneau horaire (double vérification)
       final sessionCompletedForTimeSlot = classDoc.data()?['sessionCompletedForTimeSlot'] ?? false;
       final lastSessionHoraire = classDoc.data()?['lastSessionHoraire'] as String?;
       final currentHoraire = widget.classData['horaireDebut'] as String?;
@@ -373,38 +437,34 @@ class _AttendanceListState extends State<AttendanceList> {
         }
       }
 
-      // Session de 15 minutes exactement
-      final sessionEnd = now.add(Duration(minutes: 15));
+      setState(() {
+        attendanceStatus = {
+          for (var student in enrolledStudents) student.uid: false,
+        };
+      });
 
-      print('🕒 Démarrage session QR: ${DateFormat('HH:mm').format(now)}');
-      print('⏰ Expiration session: ${DateFormat('HH:mm').format(sessionEnd)}');
-      print('⏱️ Durée totale: 15 minutes');
-
-      // Créer la session dans Firestore
       await FirebaseFirestore.instance
           .collection('attendances')
           .doc(newSessionId)
           .set({
         'classId': widget.classId,
         'className': widget.classData['nom'],
-        'createdAt': Timestamp.now(),
+        'createdAt': FieldValue.serverTimestamp(),
         'expiresAt': Timestamp.fromDate(sessionEnd),
         'presentStudentsUid': [],
         'isClosed': false,
         'sessionCode': _generateSessionCode(),
         'sessionDuration': 15,
+        'serverStartTime': FieldValue.serverTimestamp(),
       });
 
-      // Mettre à jour la classe avec la nouvelle session
       await FirebaseFirestore.instance
           .collection('classes')
           .doc(widget.classId)
           .update({
         'attendanceSessionId': newSessionId,
-        // NE PAS marquer comme complétée ici - seulement à la fin de la session
       });
 
-      // Mettre à jour l'état local
       setState(() {
         sessionId = newSessionId;
         _remainingTime = sessionEnd.difference(now).inSeconds;
@@ -414,7 +474,7 @@ class _AttendanceListState extends State<AttendanceList> {
       });
 
       _startSessionTimer();
-      _showSnackBar('QR Code activé pour 15 minutes', successColor);
+      _showSnackBar('QR Code activé pour 15 minutes - Présences réinitialisées', successColor);
 
     } catch (e) {
       print("Erreur démarrage session QR: $e");
@@ -450,15 +510,7 @@ class _AttendanceListState extends State<AttendanceList> {
         setState(() {
           _remainingTime--;
         });
-
-        // Afficher un message toutes les 30 secondes
-        if (_remainingTime % 30 == 0) {
-          final minutes = _remainingTime ~/ 60;
-          print('⏳ Attente début cours: ${minutes}min ${_remainingTime % 60}s');
-        }
       } else {
-        // Le cours commence MAINTENANT - permettre le démarrage du QR Code
-        print('🎯 Heure du cours atteinte - QR Code disponible');
         setState(() {
           _sessionStatus = SessionStatus.duringClass;
           _canStartQRSession = true;
@@ -477,10 +529,8 @@ class _AttendanceListState extends State<AttendanceList> {
 
   Future<void> _saveToHistoryAndCloseSession(String sessionIdToClose) async {
     try {
-      // 1. Sauvegarder dans l'historique
       await _saveToHistory();
 
-      // 2. Fermer la session
       await FirebaseFirestore.instance
           .collection('attendances')
           .doc(sessionIdToClose)
@@ -490,7 +540,6 @@ class _AttendanceListState extends State<AttendanceList> {
         'autoClosed': true,
       });
 
-      // 3. Supprimer la référence de session et MARQUER COMME COMPLÉTÉE POUR CE CRÉNEAU
       await FirebaseFirestore.instance
           .collection('classes')
           .doc(widget.classId)
@@ -498,18 +547,16 @@ class _AttendanceListState extends State<AttendanceList> {
         'attendanceSessionId': FieldValue.delete(),
         'todaySessionHappened': true,
         'lastSessionDate': Timestamp.now(),
-        'lastSessionHoraire': widget.classData['horaireDebut'], // Stocker l'horaire de la session
-        // AJOUTEZ CE CHAMP POUR EMPÊCHER LES NOUVELLES SESSIONS DANS CE CRÉNEAU
+        'lastSessionHoraire': widget.classData['horaireDebut'],
         'sessionCompletedForTimeSlot': true,
       });
 
-      // METTRE À JOUR L'ÉTAT LOCAL
       setState(() {
         isSessionClosed = true;
         sessionId = null;
         _sessionStatus = SessionStatus.afterClass;
         _canStartQRSession = false;
-        _hasSessionHappenedInThisTimeSlot = true; // METTRE À JOUR L'ÉTAT LOCAL
+        _hasSessionHappenedInThisTimeSlot = true;
       });
 
       _sessionTimer?.cancel();
@@ -547,7 +594,7 @@ class _AttendanceListState extends State<AttendanceList> {
         'teacherUid': classData['enseignantUid'] ?? widget.classData['enseignantUid'] ?? 'unknown',
         'teacherName': classData['enseignantName'] ?? widget.classData['enseignantName'] ?? 'Enseignant',
         'createdAt': Timestamp.now(),
-        'sessionDuration': 15, // Durée fixe de 15 minutes
+        'sessionDuration': 15,
         'totalStudents': enrolledStudents.length,
         'presentCount': presentStudents.length,
         'absentCount': absentStudents.length,
@@ -566,8 +613,6 @@ class _AttendanceListState extends State<AttendanceList> {
       await FirebaseFirestore.instance
           .collection('attendance_history')
           .add(historyData);
-
-      print('✅ Historique sauvegardé automatiquement');
 
     } catch (e) {
       print('❌ Erreur sauvegarde historique: $e');
@@ -598,6 +643,7 @@ class _AttendanceListState extends State<AttendanceList> {
             uid: doc.id,
             fullName: data['nom'] ?? 'Nom Inconnu',
             studentIdentifier: data['email'] ?? '',
+            photoUrl: data['profilePicture'],
           );
         }).toList());
       }
@@ -632,7 +678,6 @@ class _AttendanceListState extends State<AttendanceList> {
       attendanceStatus[uid] = status;
     });
 
-    // Sauvegarder automatiquement dans la session en temps réel
     if (sessionId != null) {
       _updateAttendanceInFirestore();
     }
@@ -668,11 +713,19 @@ class _AttendanceListState extends State<AttendanceList> {
   void _showSnackBar(String message, Color color) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(
+          message,
+          style: TextStyle(
+            fontWeight: FontWeight.w500,
+            color: Colors.white,
+          ),
+        ),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         duration: Duration(seconds: 3),
+        elevation: 6,
+        showCloseIcon: true,
       ),
     );
   }
@@ -681,6 +734,13 @@ class _AttendanceListState extends State<AttendanceList> {
     final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
     final remainingSeconds = (seconds % 60).toString().padLeft(2, '0');
     return '$minutes:$remainingSeconds';
+  }
+
+  int _calculateRemainingTime(Timestamp expiresAt) {
+    final now = DateTime.now();
+    final expiration = expiresAt.toDate();
+    final remaining = expiration.difference(now).inSeconds;
+    return remaining.clamp(0, 15 * 60);
   }
 
   String _getStatusMessage() {
@@ -692,11 +752,13 @@ class _AttendanceListState extends State<AttendanceList> {
       case SessionStatus.qrCodeActive:
         final minutes = _remainingTime ~/ 60;
         final seconds = _remainingTime % 60;
-        return 'QR Code actif - Expire dans: ${minutes}min ${seconds}s';
+        return 'QR Code actif';
       case SessionStatus.afterClass:
-      // UTILISER LA VARIABLE LOCALE AU LIEU D'APPELER LA MÉTHODE
-
         return 'Session terminée - Présences sauvegardées';
+      case SessionStatus.teacherAbsent:
+        return 'Cours terminé - Professeur absent';
+      case SessionStatus.classCanceled:
+        return 'Cours annulé';
       case SessionStatus.loading:
         return 'Chargement...';
       default:
@@ -711,11 +773,15 @@ class _AttendanceListState extends State<AttendanceList> {
       case SessionStatus.duringClass:
         return Icons.play_lesson_rounded;
       case SessionStatus.qrCodeActive:
-        return Icons.qr_code_rounded;
+        return Icons.qr_code_2_rounded;
       case SessionStatus.afterClass:
-        return Icons.done_all_rounded;
+        return Icons.verified_rounded;
+      case SessionStatus.teacherAbsent:
+        return Icons.person_off_rounded;
+      case SessionStatus.classCanceled:
+        return Icons.cancel_rounded;
       case SessionStatus.loading:
-        return Icons.hourglass_empty_rounded;
+        return Icons.hourglass_bottom_rounded;
       default:
         return Icons.help_outline_rounded;
     }
@@ -731,6 +797,10 @@ class _AttendanceListState extends State<AttendanceList> {
         return successColor;
       case SessionStatus.afterClass:
         return Colors.blue;
+      case SessionStatus.teacherAbsent:
+        return Colors.orange;
+      case SessionStatus.classCanceled:
+        return Colors.grey;
       case SessionStatus.loading:
         return textSecondary;
       default:
@@ -746,6 +816,132 @@ class _AttendanceListState extends State<AttendanceList> {
         _sessionStatus == SessionStatus.qrCodeActive;
   }
 
+  // Design moderne 3D pour les cartes
+  BoxDecoration _modernCardDecoration({Color? color, bool withGradient = false}) {
+    return BoxDecoration(
+      gradient: withGradient ? cardGradient : null,
+      color: withGradient ? null : color ?? surfaceColor,
+      borderRadius: BorderRadius.circular(20),
+      boxShadow: [
+        BoxShadow(
+          color: cardShadowColor.withOpacity(0.1),
+          blurRadius: 20,
+          offset: Offset(0, 4),
+          spreadRadius: -2,
+        ),
+        BoxShadow(
+          color: cardShadowColor.withOpacity(0.05),
+          blurRadius: 8,
+          offset: Offset(0, 2),
+        ),
+      ],
+      border: Border.all(
+        color: Colors.white.withOpacity(0.3),
+        width: 1,
+      ),
+    );
+  }
+
+  Widget _buildModernCard({
+    required Widget child,
+    Color? color,
+    bool withGradient = false,
+    EdgeInsets? padding,
+  }) {
+    return Container(
+      decoration: _modernCardDecoration(color: color, withGradient: withGradient),
+      padding: padding ?? const EdgeInsets.all(20),
+      child: child,
+    );
+  }
+
+  // Méthode pour construire l'avatar de l'étudiant
+  Widget _buildStudentAvatar(Student student) {
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.grey.shade200,
+          width: 2,
+        ),
+      ),
+      child: ClipOval(
+        child: student.photoUrl != null && student.photoUrl!.isNotEmpty
+            ? Image.network(
+          student.photoUrl!,
+          fit: BoxFit.cover,
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) return child;
+            return _buildDefaultAvatar(student.fullName);
+          },
+          errorBuilder: (context, error, stackTrace) {
+            return _buildDefaultAvatar(student.fullName);
+          },
+        )
+            : _buildDefaultAvatar(student.fullName),
+      ),
+    );
+  }
+
+  // Avatar par défaut avec initiales
+  Widget _buildDefaultAvatar(String fullName) {
+    final initials = _getInitials(fullName);
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [primaryColor, primaryDark],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Méthode pour extraire les initiales
+  String _getInitials(String fullName) {
+    final names = fullName.split(' ');
+    if (names.length >= 2) {
+      return '${names[0][0]}${names[1][0]}'.toUpperCase();
+    } else if (fullName.isNotEmpty) {
+      return fullName.substring(0, 1).toUpperCase();
+    }
+    return '?';
+  }
+
+  // NOUVELLE MÉTHODE : Icône de présence/absence
+  Widget _buildAttendanceIcon(bool isPresent) {
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: isPresent ? successColor.withOpacity(0.1) : errorColor.withOpacity(0.1),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: isPresent ? successColor : errorColor,
+          width: 1.5,
+        ),
+      ),
+      child: Icon(
+        isPresent ? Icons.check_rounded : Icons.close_rounded,
+        size: 14,
+        color: isPresent ? successColor : errorColor,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -755,7 +951,8 @@ class _AttendanceListState extends State<AttendanceList> {
           widget.classData['nom'] ?? 'Session de présence',
           style: TextStyle(
             color: textPrimary,
-            fontWeight: FontWeight.w600,
+            fontWeight: FontWeight.w700,
+            fontSize: 18,
           ),
         ),
         backgroundColor: surfaceColor,
@@ -765,11 +962,17 @@ class _AttendanceListState extends State<AttendanceList> {
         actions: [
           if (_sessionStatus == SessionStatus.qrCodeActive && !isSessionClosed)
             IconButton(
-              icon: Icon(Icons.info_outline_rounded),
+              icon: Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  gradient: primaryGradient,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.info_outline_rounded, size: 18, color: Colors.white),
+              ),
               onPressed: () {
                 _showSnackBar('QR Code valable 15 minutes - Sauvegarde automatique', primaryColor);
               },
-              tooltip: 'Sauvegarde automatique',
             ),
         ],
       ),
@@ -783,7 +986,6 @@ class _AttendanceListState extends State<AttendanceList> {
             final expiresAt = data['expiresAt'] as Timestamp?;
             final isClosed = data['isClosed'] ?? false;
 
-            // SI LA SESSION EST FERMÉE, METTRE À JOUR L'ÉTAT
             if (isClosed && !isSessionClosed) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 setState(() {
@@ -791,7 +993,7 @@ class _AttendanceListState extends State<AttendanceList> {
                   sessionId = null;
                   _sessionStatus = SessionStatus.afterClass;
                   _canStartQRSession = false;
-                  _hasSessionHappenedInThisTimeSlot = true; // METTRE À JOUR L'ÉTAT LOCAL
+                  _hasSessionHappenedInThisTimeSlot = true;
                 });
               });
             }
@@ -818,7 +1020,6 @@ class _AttendanceListState extends State<AttendanceList> {
           final presentUids = List<String>.from(data['presentStudentsUid'] ?? []);
           final isClosed = data['isClosed'] ?? false;
 
-          // Mettre à jour l'état local avec les données Firestore
           for (var s in enrolledStudents) {
             if (presentUids.contains(s.uid)) {
               attendanceStatus[s.uid] = true;
@@ -828,32 +1029,44 @@ class _AttendanceListState extends State<AttendanceList> {
           final presentCount = attendanceStatus.values.where((v) => v).length;
           final absentCount = enrolledStudents.length - presentCount;
 
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                _buildHeader(presentCount, absentCount),
-                const SizedBox(height: 8),
-                _buildStatusSection(),
-                // AFFICHER DIRECTEMENT LE MESSAGE SI SESSION DÉJÀ EFFECTUÉE
-                if (_hasSessionHappenedInThisTimeSlot) ...[
-                  const SizedBox(height: 8),
-                  _buildSessionAlreadyDoneSection(),
-                ] else if (_sessionStatus == SessionStatus.duringClass && _canStartQRSession) ...[
-                  const SizedBox(height: 8),
-                  _buildStartQRSection(),
+          return SingleChildScrollView(
+            physics: BouncingScrollPhysics(),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  _buildHeader(presentCount, absentCount),
+                  const SizedBox(height: 16),
+                  _buildStatusSection(),
+
+                  if (_hasSessionHappenedInThisTimeSlot) ...[
+                    const SizedBox(height: 16),
+                    _buildSessionAlreadyDoneSection(),
+                  ]
+                  else if (_sessionStatus == SessionStatus.teacherAbsent) ...[
+                    const SizedBox(height: 16),
+                    _buildTeacherAbsentSection(),
+                  ]
+                  else if (_sessionStatus == SessionStatus.classCanceled) ...[
+                      const SizedBox(height: 16),
+                      _buildClassCanceledSection(),
+                    ]
+                    else if (_sessionStatus == SessionStatus.duringClass && _canStartQRSession) ...[
+                        const SizedBox(height: 16),
+                        _buildStartQRSection(),
+                      ],
+
+                  if (_canShowQRCode) ...[
+                    const SizedBox(height: 16),
+                    _buildQrCodeSection(),
+                  ],
+
+                  const SizedBox(height: 16),
+                  _buildSearchBar(),
+                  const SizedBox(height: 16),
+                  _buildStudentList(isClosed),
                 ],
-                if (_canShowQRCode) ...[
-                  const SizedBox(height: 8),
-                  _buildQrCodeSection(),
-                ],
-                const SizedBox(height: 8),
-                _buildSearchBar(),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: _buildStudentList(isClosed),
-                ),
-              ],
+              ),
             ),
           );
         },
@@ -861,58 +1074,80 @@ class _AttendanceListState extends State<AttendanceList> {
     );
   }
 
-  int _calculateRemainingTime(Timestamp expiresAt) {
-    final now = DateTime.now();
-    final expiration = expiresAt.toDate();
-    return expiration.difference(now).inSeconds;
-  }
-
   Widget _buildStatusSection() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+    return _buildModernCard(
+      withGradient: true,
       child: Row(
         children: [
-          Icon(_getStatusIcon(), size: 20, color: _getStatusColor()),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              _getStatusMessage(),
-              style: TextStyle(
-                color: _getStatusColor(),
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [_getStatusColor(), _getStatusColor().withOpacity(0.8)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: _getStatusColor().withOpacity(0.3),
+                  blurRadius: 8,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(_getStatusIcon(), size: 22, color: Colors.white),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Statut de la session',
+                  style: TextStyle(
+                    color: textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _getStatusMessage(),
+                  style: TextStyle(
+                    color: _getStatusColor(),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
             ),
           ),
           if (_sessionStatus == SessionStatus.qrCodeActive)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: successColor.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(6),
+                gradient: successGradient,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: successColor.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
               ),
               child: Row(
                 children: [
-                  Icon(Icons.auto_mode_rounded, size: 12, color: successColor),
+                  Icon(Icons.auto_awesome_rounded, size: 14, color: Colors.white),
                   const SizedBox(width: 4),
                   Text(
                     '15min',
                     style: TextStyle(
-                      color: successColor,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
@@ -923,64 +1158,57 @@ class _AttendanceListState extends State<AttendanceList> {
     );
   }
 
-  // NOUVELLE SECTION : AFFICHAGE DIRECT DU MESSAGE QUAND SESSION DÉJÀ EFFECTUÉE
   Widget _buildSessionAlreadyDoneSection() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+    return _buildModernCard(
       child: Column(
         children: [
           Row(
             children: [
               Container(
-                width: 28,
-                height: 28,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   color: warningColor.withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.info_rounded, color: warningColor, size: 14),
+                child: Icon(Icons.info_rounded, color: warningColor, size: 18),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Session déjà effectuée',
                   style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                     color: textPrimary,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Text(
-            'Une session de présence a déjà été réalisée pour ce créneau horaire aujourd\'hui',
+            'Une session de présence a déjà été réalisée',
             style: TextStyle(
               color: textSecondary,
-              fontSize: 10,
+              fontSize: 14,
             ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
-          Text(
-            'Horaire: ${widget.classData['horaireDebut'] ?? 'Non spécifié'} - ${widget.classData['horaireFin'] ?? 'Non spécifié'}',
-            style: TextStyle(
-              color: primaryColor,
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: primaryColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              'Horaire: ${widget.classData['horaireDebut'] ?? 'Non spécifié'} - ${widget.classData['horaireFin'] ?? 'Non spécifié'}',
+              style: TextStyle(
+                color: primaryColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -989,69 +1217,74 @@ class _AttendanceListState extends State<AttendanceList> {
   }
 
   Widget _buildStartQRSection() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+    return _buildModernCard(
       child: Column(
         children: [
           Row(
             children: [
               Container(
-                width: 28,
-                height: 28,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
-                  color: primaryColor.withOpacity(0.1),
+                  gradient: primaryGradient,
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.play_arrow_rounded, color: primaryColor, size: 14),
+                child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 18),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Démarrer le QR Code de présence',
                   style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                     color: textPrimary,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Text(
             'Le QR Code sera actif pendant 15 minutes',
             style: TextStyle(
               color: textSecondary,
-              fontSize: 10,
+              fontSize: 14,
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 8),
-          SizedBox(
+          const SizedBox(height: 16),
+          Container(
             width: double.infinity,
+            height: 50,
+            decoration: BoxDecoration(
+              gradient: primaryGradient,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: primaryColor.withOpacity(0.3),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
             child: ElevatedButton.icon(
               onPressed: _startQRSession,
-              icon: Icon(Icons.qr_code_rounded, size: 16),
-              label: Text('Démarrer QR Code (15min)'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryColor,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+              icon: Icon(Icons.qr_code_2_rounded, size: 20),
+              label: Text(
+                'Démarrer QR Code (15min)',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
                 ),
-                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.transparent,
+                foregroundColor: Colors.white,
+                shadowColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
               ),
             ),
           ),
@@ -1064,53 +1297,47 @@ class _AttendanceListState extends State<AttendanceList> {
     final minutes = _remainingTime ~/ 60;
     final seconds = _remainingTime % 60;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+    return _buildModernCard(
       child: Column(
         children: [
           Row(
             children: [
               Container(
-                width: 28,
-                height: 28,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
-                  color: primaryColor.withOpacity(0.1),
+                  gradient: primaryGradient,
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.qr_code_rounded, color: primaryColor, size: 14),
+                child: Icon(Icons.qr_code_2_rounded, color: Colors.white, size: 18),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'QR Code de présence',
                   style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                     color: textPrimary,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 16),
           Container(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey[200]!, width: 1),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 20,
+                  offset: Offset(0, 8),
+                ),
+              ],
+              border: Border.all(color: Colors.grey[100]!, width: 2),
             ),
             child: QrImageView(
               data: sessionId ?? '',
@@ -1119,23 +1346,30 @@ class _AttendanceListState extends State<AttendanceList> {
               foregroundColor: primaryColor,
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            'Durée: 15 minutes • Expire dans: ${minutes}min ${seconds}s',
-            style: TextStyle(
-              color: textSecondary,
-              fontSize: 10,
-              fontWeight: FontWeight.w500,
+          const SizedBox(height: 16),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: successColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
             ),
-            textAlign: TextAlign.center,
+            child: Text(
+              'Expire dans: ${minutes}min ${seconds}s',
+              style: TextStyle(
+                color: successColor,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+            ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Text(
             'Sauvegarde automatique à la fin',
             style: TextStyle(
-              color: successColor,
-              fontSize: 9,
-              fontWeight: FontWeight.w600,
+              color: textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
@@ -1149,22 +1383,31 @@ class _AttendanceListState extends State<AttendanceList> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 60,
+            height: 60,
             decoration: BoxDecoration(
-              color: primaryColor.withOpacity(0.1),
+              gradient: primaryGradient,
               shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: primaryColor.withOpacity(0.3),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
             ),
             child: CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              strokeWidth: 3,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 16),
           Text(
             'Chargement...',
             style: TextStyle(
               color: textSecondary,
-              fontSize: 12,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -1173,20 +1416,8 @@ class _AttendanceListState extends State<AttendanceList> {
   }
 
   Widget _buildHeader(int presentCount, int absentCount) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+    return _buildModernCard(
+      withGradient: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1194,11 +1425,11 @@ class _AttendanceListState extends State<AttendanceList> {
             "Classe : ${widget.classData['nom']}",
             style: TextStyle(
               color: textPrimary,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
@@ -1209,23 +1440,30 @@ class _AttendanceListState extends State<AttendanceList> {
           ),
           if (_sessionStatus == SessionStatus.afterClass)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.verified_rounded, size: 14, color: Colors.blue),
-                  const SizedBox(width: 4),
-                  Text(
-                    _hasSessionHappenedInThisTimeSlot
-                        ? 'Session déjà effectuée pour ce créneau horaire'
-                        : 'Présences sauvegardées dans l\'historique',
-                    style: TextStyle(
-                      color: Colors.blue,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w500,
+              padding: const EdgeInsets.only(top: 12),
+              child: Container(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.verified_rounded, size: 16, color: Colors.blue),
+                    const SizedBox(width: 8),
+                    Text(
+                      _hasSessionHappenedInThisTimeSlot
+                          ? 'Session déjà effectuée '
+                          : 'Présences sauvegardées dans l\'historique',
+                      style: TextStyle(
+                        color: Colors.blue,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
         ],
@@ -1237,19 +1475,30 @@ class _AttendanceListState extends State<AttendanceList> {
     return Column(
       children: [
         Container(
-          width: 32,
-          height: 32,
+          width: 50,
+          height: 50,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            gradient: LinearGradient(
+              colors: [color, color.withOpacity(0.8)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
             shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: color.withOpacity(0.3),
+                blurRadius: 8,
+                offset: Offset(0, 4),
+              ),
+            ],
           ),
-          child: Icon(icon, color: color, size: 16),
+          child: Icon(icon, color: Colors.white, size: 24),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
         Text(
           count.toString(),
           style: TextStyle(
-            fontSize: 14,
+            fontSize: 20,
             fontWeight: FontWeight.bold,
             color: textPrimary,
           ),
@@ -1257,8 +1506,9 @@ class _AttendanceListState extends State<AttendanceList> {
         Text(
           title,
           style: TextStyle(
-            fontSize: 9,
+            fontSize: 12,
             color: textSecondary,
+            fontWeight: FontWeight.w500,
           ),
         ),
       ],
@@ -1269,22 +1519,26 @@ class _AttendanceListState extends State<AttendanceList> {
     return Container(
       decoration: BoxDecoration(
         color: surfaceColor,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 6,
-            offset: const Offset(0, 1),
+            color: cardShadowColor.withOpacity(0.1),
+            blurRadius: 12,
+            offset: Offset(0, 4),
           ),
         ],
+        border: Border.all(color: Colors.grey[100]!, width: 1),
       ),
       child: TextField(
         decoration: InputDecoration(
-          prefixIcon: Icon(Icons.search_rounded, color: textSecondary, size: 18),
+          prefixIcon: Container(
+            padding: EdgeInsets.all(12),
+            child: Icon(Icons.search_rounded, color: primaryColor, size: 20),
+          ),
           hintText: 'Rechercher un étudiant...',
-          hintStyle: TextStyle(color: textSecondary.withOpacity(0.6), fontSize: 12),
+          hintStyle: TextStyle(color: textSecondary.withOpacity(0.6), fontSize: 14),
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         ),
         onChanged: (val) => setState(() => searchQuery = val),
       ),
@@ -1293,67 +1547,68 @@ class _AttendanceListState extends State<AttendanceList> {
 
   Widget _buildStudentList(bool isClosed) {
     if (filteredStudents.isEmpty) {
-      return Center(
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 60),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.search_off_rounded, size: 40, color: textSecondary.withOpacity(0.3)),
-            const SizedBox(height: 6),
+            Icon(Icons.search_off_rounded, size: 60, color: textSecondary.withOpacity(0.3)),
+            const SizedBox(height: 12),
             Text(
               'Aucun étudiant trouvé',
-              style: TextStyle(color: textSecondary, fontSize: 12),
+              style: TextStyle(color: textSecondary, fontSize: 16, fontWeight: FontWeight.w600),
             ),
           ],
         ),
       );
     }
 
-    return ListView.builder(
-      itemCount: filteredStudents.length,
-      itemBuilder: (context, index) {
-        final student = filteredStudents[index];
+    return Column(
+      children: filteredStudents.map((student) {
         final isPresent = attendanceStatus[student.uid] ?? false;
 
         return Container(
-          margin: const EdgeInsets.only(bottom: 4),
+          margin: const EdgeInsets.only(bottom: 8),
           child: Material(
             color: surfaceColor,
-            borderRadius: BorderRadius.circular(8),
-            elevation: 1,
+            borderRadius: BorderRadius.circular(16),
+            elevation: 2,
             child: ListTile(
-              leading: Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: isPresent ? successColor.withOpacity(0.1) : errorColor.withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  isPresent ? Icons.check_rounded : Icons.close_rounded,
-                  color: isPresent ? successColor : errorColor,
-                  size: 14,
-                ),
-              ),
+              leading: _buildStudentAvatar(student),
               title: Text(
                 student.fullName,
                 style: TextStyle(
-                  fontWeight: FontWeight.w500,
+                  fontWeight: FontWeight.w600,
                   color: textPrimary,
-                  fontSize: 12,
+                  fontSize: 14,
                 ),
               ),
               subtitle: Text(
                 student.studentIdentifier,
-                style: TextStyle(color: textSecondary, fontSize: 10),
+                style: TextStyle(color: textSecondary, fontSize: 12),
               ),
-              trailing: !isClosed ? _buildAttendanceBadge(student.uid, isPresent) : null,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              minLeadingWidth: 0,
-              dense: true,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 🔥 NOUVEAU : Icône de présence/absence
+                  if (_sessionStatus == SessionStatus.afterClass || isSessionClosed)
+                    _buildAttendanceIcon(isPresent),
+
+                  const SizedBox(width: 8),
+
+                  // Bouton présent/absent (seulement si session active)
+                  if (!isClosed)
+                    _buildAttendanceBadge(student.uid, isPresent),
+                ],
+              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
             ),
           ),
         );
-      },
+      }).toList(),
     );
   }
 
@@ -1361,23 +1616,154 @@ class _AttendanceListState extends State<AttendanceList> {
     return GestureDetector(
       onTap: () => _toggleStudent(uid, !isPresent),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        duration: const Duration(milliseconds: 300),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: isPresent ? successColor : Colors.grey[100],
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isPresent ? successColor : Colors.grey[300]!,
+          gradient: isPresent ? successGradient : LinearGradient(
+            colors: [Colors.grey.shade300, Colors.grey.shade400],
           ),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: (isPresent ? successColor : Colors.grey).withOpacity(0.3),
+              blurRadius: 6,
+              offset: Offset(0, 2),
+            ),
+          ],
         ),
         child: Text(
           isPresent ? 'Présent' : 'Absent',
           style: TextStyle(
-            color: isPresent ? Colors.white : textSecondary,
-            fontSize: 9,
-            fontWeight: FontWeight.w600,
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
           ),
         ),
+      ),
+    );
+  }
+
+  // Sections pour professeur absent et cours annulé (design moderne)
+  Widget _buildTeacherAbsentSection() {
+    return _buildModernCard(
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.orange, Colors.orange.shade700],
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.person_off_rounded, color: Colors.white, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Professeur absent',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.orange,
+                      ),
+                    ),
+                    Text(
+                      'Aucun QR Code de présence n\'a été généré',
+                      style: TextStyle(
+                        color: textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.orange.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orange.withOpacity(0.2)),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.notifications_active_rounded, size: 18, color: Colors.orange),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Les étudiants ont été notifiés',
+                      style: TextStyle(
+                        color: Colors.orange,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Une notification a été envoyée aux étudiants pour les informer de cette absence.',
+                  style: TextStyle(
+                    color: Colors.orange,
+                    fontSize: 12,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClassCanceledSection() {
+    return _buildModernCard(
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.cancel_rounded, color: Colors.grey, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Cours annulé',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.grey,
+                  ),
+                ),
+                Text(
+                  'Cette séance a été annulée par le professeur',
+                  style: TextStyle(
+                    color: textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

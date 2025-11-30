@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
@@ -59,7 +60,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     }
   }
 
-  // REMPLACEZ la méthode _getProfilePictureUrl() par ceci :
   Stream<String?> getProfilePictureStream() {
     return FirebaseFirestore.instance
         .collection('users')
@@ -83,6 +83,20 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       if (snapshot.exists) {
         final userData = snapshot.data() as Map<String, dynamic>;
         return userData['nom'] as String?;
+      }
+      return null;
+    });
+  }
+
+  Stream<String?> getUserEmailStream() {
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.userUid)
+        .snapshots()
+        .map((snapshot) {
+      if (snapshot.exists) {
+        final userData = snapshot.data() as Map<String, dynamic>;
+        return userData['email'] as String?;
       }
       return null;
     });
@@ -150,7 +164,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         var jsonResponse = json.decode(responseData);
         var imageUrl = jsonResponse['secure_url'];
 
-        // SAUVEGARDEZ dans Firestore - le StreamBuilder se mettra à jour automatiquement
         await FirebaseFirestore.instance
             .collection('users')
             .doc(widget.userUid)
@@ -172,7 +185,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
 
   Future<void> _deleteProfilePicture(StateSetter setState) async {
     try {
-      // Supprimer de Firestore - le StreamBuilder se mettra à jour automatiquement
       await FirebaseFirestore.instance
           .collection('users')
           .doc(widget.userUid)
@@ -194,6 +206,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       builder: (context) => EditProfileDialog(
         userUid: widget.userUid,
         currentName: _currentUserName,
+        currentEmail: _userEmail ?? widget.userEmail,
         onProfileUpdated: _updateUserName,
       ),
     );
@@ -328,7 +341,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         _isEditMode = false;
       });
 
-      // Forcer le rafraîchissement des données
       await Future.delayed(Duration(milliseconds: 500));
       setState(() {});
 
@@ -356,26 +368,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       padding: const EdgeInsets.all(16.0),
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: DashboardEnseignant.surfaceColor,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isSmallScreen = constraints.maxWidth < 400;
-                return isSmallScreen ? _buildMobileHeader() : _buildTabletHeader();
-              },
-            ),
-          ),
+
           const SizedBox(height: 20),
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
@@ -467,210 +460,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     );
   }
 
-  Widget _buildMobileHeader() {
-    return Column(
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: _isDeleteMode ? Colors.red.withOpacity(0.1) : DashboardEnseignant.primaryColor.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: IconButton(
-                onPressed: () {
-                  setState(() {
-                    _isDeleteMode = !_isDeleteMode;
-                    _isEditMode = false;
-                  });
-                },
-                icon: Icon(
-                  _isDeleteMode ? Icons.close_rounded : Icons.delete_outline_rounded,
-                  color: _isDeleteMode ? Colors.red : DashboardEnseignant.primaryColor,
-                  size: 20,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: _isEditMode ? Colors.orange.withOpacity(0.1) : DashboardEnseignant.primaryColor.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: IconButton(
-                onPressed: () {
-                  setState(() {
-                    _isEditMode = !_isEditMode;
-                    _isDeleteMode = false;
-                  });
-                },
-                icon: Icon(
-                  _isEditMode ? Icons.close_rounded : Icons.edit_outlined,
-                  color: _isEditMode ? Colors.orange : DashboardEnseignant.primaryColor,
-                  size: 20,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _isDeleteMode ? 'Mode suppression' : _isEditMode ? 'Mode modification' : 'Actions',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: DashboardEnseignant.textColor,
-                    ),
-                  ),
-                  Text(
-                    _isDeleteMode ? 'Appuyez sur ❌ pour supprimer' :
-                    _isEditMode ? 'Appuyez sur ✏️ pour modifier' : 'Activez un mode',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: DashboardEnseignant.hintColor,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CreateClassPage(
-                    enseignantUid: widget.userUid,
-                    userName: widget.userName,
-                  ),
-                ),
-              );
-            },
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('Nouvelle séance'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: DashboardEnseignant.primaryColor,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 
-  Widget _buildTabletHeader() {
-    return Row(
-      children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: _isDeleteMode ? Colors.red.withOpacity(0.1) : DashboardEnseignant.primaryColor.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: IconButton(
-            onPressed: () {
-              setState(() {
-                _isDeleteMode = !_isDeleteMode;
-                _isEditMode = false;
-              });
-            },
-            icon: Icon(
-              _isDeleteMode ? Icons.close_rounded : Icons.delete_outline_rounded,
-              color: _isDeleteMode ? Colors.red : DashboardEnseignant.primaryColor,
-              size: 20,
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: _isEditMode ? Colors.orange.withOpacity(0.1) : DashboardEnseignant.primaryColor.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: IconButton(
-            onPressed: () {
-              setState(() {
-                _isEditMode = !_isEditMode;
-                _isDeleteMode = false;
-              });
-            },
-            icon: Icon(
-              _isEditMode ? Icons.close_rounded : Icons.edit_outlined,
-              color: _isEditMode ? Colors.orange : DashboardEnseignant.primaryColor,
-              size: 20,
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _isDeleteMode ? 'Mode suppression' : _isEditMode ? 'Mode modification' : 'Actions',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: DashboardEnseignant.textColor,
-                ),
-              ),
-              Text(
-                _isDeleteMode ? 'Appuyez sur ❌ pour supprimer' :
-                _isEditMode ? 'Appuyez sur ✏️ pour modifier' : 'Activez un mode',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: DashboardEnseignant.hintColor,
-                ),
-              ),
-            ],
-          ),
-        ),
-        Container(
-          height: 44,
-          child: ElevatedButton.icon(
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CreateClassPage(
-                    enseignantUid: widget.userUid,
-                    userName: widget.userName,
-                  ),
-                ),
-              );
-            },
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('Nouvelle séance'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: DashboardEnseignant.primaryColor,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 
   Widget _buildEmptyState() {
     return SingleChildScrollView(
@@ -713,67 +503,12 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         print('📊 Erreur historique: ${snapshot.error}');
 
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                CircularProgressIndicator(
-                  color: DashboardEnseignant.primaryColor,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Chargement de l\'historique...',
-                  style: TextStyle(
-                    color: DashboardEnseignant.hintColor,
-                  ),
-                ),
-              ],
-            ),
-          );
+          return _buildHistoryLoadingState();
         }
 
         if (snapshot.hasError) {
           print('❌ Erreur détaillée historique: ${snapshot.error}');
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.error_outline_rounded, size: 64, color: Colors.red),
-                const SizedBox(height: 16),
-                Text(
-                  'Erreur de chargement',
-                  style: TextStyle(
-                    color: DashboardEnseignant.textColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Text(
-                    'Impossible de charger l\'historique. Vérifiez votre connexion Internet.',
-                    style: TextStyle(
-                      color: DashboardEnseignant.hintColor,
-                      fontSize: 14,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: () {
-                    setState(() {});
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: DashboardEnseignant.primaryColor,
-                    foregroundColor: Colors.white,
-                  ),
-                  child: Text('Réessayer'),
-                ),
-              ],
-            ),
-          );
+          return _buildHistoryErrorState();
         }
 
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
@@ -790,16 +525,128 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
           return dateB.compareTo(dateA);
         });
 
-        return ListView.builder(
-          padding: EdgeInsets.all(16),
-          itemCount: historyItems.length,
-          itemBuilder: (context, index) {
-            final item = historyItems[index].data() as Map<String, dynamic>;
-            print('📊 Item $index: ${item['className']}');
-            return _buildHistoryCard(item, historyItems[index].id);
-          },
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                DashboardEnseignant.backgroundColor.withOpacity(0.8),
+                DashboardEnseignant.backgroundColor,
+              ],
+            ),
+          ),
+          child: Column(
+            children: [
+              // En-tête moderne
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      DashboardEnseignant.primaryColor.withOpacity(0.1),
+                      DashboardEnseignant.secondaryColor.withOpacity(0.05),
+                    ],
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(30),
+                    bottomRight: Radius.circular(30),
+                  ),
+                ),
+                child: Column(
+                  children: [
+
+                    Text(
+                      'Historique des Présences',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: DashboardEnseignant.textColor,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${historyItems.length} séance${historyItems.length > 1 ? 's' : ''} enregistrée${historyItems.length > 1 ? 's' : ''}',
+                      style: TextStyle(
+                        color: DashboardEnseignant.hintColor,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Liste des historiques avec design 3D moderne
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  itemCount: historyItems.length,
+                  itemBuilder: (context, index) {
+                    final item = historyItems[index].data() as Map<String, dynamic>;
+                    return _buildModernHistoryCard(item, historyItems[index].id, index);
+                  },
+                ),
+              ),
+            ],
+          ),
         );
       },
+    );
+  }
+  Widget _buildHistoryLoadingState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  DashboardEnseignant.primaryColor,
+                  DashboardEnseignant.secondaryColor,
+                ],
+              ),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: DashboardEnseignant.primaryColor.withOpacity(0.3),
+                  blurRadius: 15,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: const CircularProgressIndicator(
+              strokeWidth: 3,
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'Chargement de l\'historique...',
+            style: TextStyle(
+              color: DashboardEnseignant.textColor,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Récupération de vos données',
+            style: TextStyle(
+              color: DashboardEnseignant.hintColor,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -860,7 +707,162 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       ),
     );
   }
-
+  Widget _buildHistoryErrorState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 100,
+            height: 100,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.red.shade400,
+                  Colors.red.shade600,
+                ],
+              ),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.red.withOpacity(0.3),
+                  blurRadius: 15,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Icon(
+              Icons.error_outline_rounded,
+              color: Colors.white,
+              size: 40,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'Erreur de chargement',
+            style: TextStyle(
+              color: DashboardEnseignant.textColor,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: Text(
+              'Impossible de charger l\'historique. Vérifiez votre connexion Internet.',
+              style: TextStyle(
+                color: DashboardEnseignant.hintColor,
+                fontSize: 14,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(15),
+              boxShadow: [
+                BoxShadow(
+                  color: DashboardEnseignant.primaryColor.withOpacity(0.3),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: ElevatedButton(
+              onPressed: () {
+                setState(() {});
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: DashboardEnseignant.primaryColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+              child: Text(
+                'Réessayer',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  Widget _buildErrorHistoryCard() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.red.withOpacity(0.1),
+            Colors.orange.withOpacity(0.05),
+          ],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.red.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.2),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.error_outline_rounded,
+                color: Colors.red,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Données corrompues',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: DashboardEnseignant.textColor,
+                    ),
+                  ),
+                  Text(
+                    'Impossible d\'afficher cette entrée',
+                    style: TextStyle(
+                      color: DashboardEnseignant.hintColor,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -873,7 +875,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     );
   }
 
-  Widget _buildHistoryCard(Map<String, dynamic> data, String historyId) {
+  Widget _buildModernHistoryCard(Map<String, dynamic> data, String historyId, int index) {
     try {
       Timestamp? dateTimestamp;
 
@@ -890,72 +892,326 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       final totalStudents = data['totalStudents'] ?? 0;
       final percentage = totalStudents > 0 ? (presentCount / totalStudents * 100).round() : 0;
 
-      return Card(
-        margin: EdgeInsets.only(bottom: 12),
-        elevation: 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: ListTile(
-          leading: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: DashboardEnseignant.primaryColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
+      // Couleur basée sur le pourcentage de présence
+      Color getPercentageColor() {
+        if (percentage >= 80) return Colors.green;
+        if (percentage >= 60) return Colors.orange;
+        return Colors.red;
+      }
+
+      Color getPercentageLightColor() {
+        if (percentage >= 80) return Colors.green.withOpacity(0.1);
+        if (percentage >= 60) return Colors.orange.withOpacity(0.1);
+        return Colors.red.withOpacity(0.1);
+      }
+
+      return Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        child: Stack(
+          children: [
+            // Effet d'ombre portée 3D
+            Container(
+              margin: const EdgeInsets.only(top: 8, right: 8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    DashboardEnseignant.primaryColor.withOpacity(0.1),
+                    DashboardEnseignant.secondaryColor.withOpacity(0.05),
+                  ],
+                ),
+              ),
             ),
-            child: Icon(Icons.history_rounded,
-                color: DashboardEnseignant.primaryColor),
-          ),
-          title: Text(
-            data['className'] ?? 'Séance sans nom',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('${DateFormat('dd/MM/yyyy').format(date)} • ${data['startTime'] ?? ''}'),
-              Text(data['schoolClass'] ?? 'Classe non spécifiée'),
-              SizedBox(height: 4),
-              Row(
-                children: [
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: percentage >= 70 ? Colors.green.withOpacity(0.1) :
-                      percentage >= 50 ? Colors.orange.withOpacity(0.1) :
-                      Colors.red.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      '$presentCount/$totalStudents présents ($percentage%)',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: percentage >= 70 ? Colors.green :
-                        percentage >= 50 ? Colors.orange :
-                        Colors.red,
+
+            // Carte principale avec effet 3D
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    DashboardEnseignant.surfaceColor.withOpacity(0.95),
+                    DashboardEnseignant.surfaceColor.withOpacity(0.8),
+                  ],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: DashboardEnseignant.primaryColor.withOpacity(0.15),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                    spreadRadius: -5,
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 6,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.3),
+                  width: 1,
+                ),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Material(
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(20),
+                    child: InkWell(
+                      onTap: () => _openHistoryDetails(data, historyId),
+                      borderRadius: BorderRadius.circular(20),
+                      splashColor: DashboardEnseignant.primaryColor.withOpacity(0.1),
+                      highlightColor: DashboardEnseignant.primaryColor.withOpacity(0.05),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Row(
+                          children: [
+                            // Indicateur visuel avec effet 3D
+                            Container(
+                              width: 60,
+                              height: 60,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    getPercentageColor().withOpacity(0.2),
+                                    getPercentageColor().withOpacity(0.1),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(15),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: getPercentageColor().withOpacity(0.3),
+                                    blurRadius: 8,
+                                    offset: const Offset(2, 2),
+                                  ),
+                                  BoxShadow(
+                                    color: Colors.white.withOpacity(0.5),
+                                    blurRadius: 8,
+                                    offset: const Offset(-2, -2),
+                                  ),
+                                ],
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.4),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    '$percentage%',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800,
+                                      color: getPercentageColor(),
+                                    ),
+                                  ),
+                                  Text(
+                                    'présent',
+                                    style: TextStyle(
+                                      fontSize: 8,
+                                      fontWeight: FontWeight.w600,
+                                      color: getPercentageColor().withOpacity(0.8),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            const SizedBox(width: 16),
+
+                            // Contenu principal
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Nom de la séance
+                                  Text(
+                                    data['className'] ?? 'Séance sans nom',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800,
+                                      color: DashboardEnseignant.textColor,
+                                      letterSpacing: -0.3,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+
+                                  const SizedBox(height: 6),
+
+                                  // Date et horaire
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.calendar_today_rounded,
+                                        size: 12,
+                                        color: DashboardEnseignant.hintColor,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        DateFormat('dd/MM/yyyy').format(date),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: DashboardEnseignant.hintColor,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Icon(
+                                        Icons.access_time_rounded,
+                                        size: 12,
+                                        color: DashboardEnseignant.hintColor,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        data['startTime'] ?? '--:--',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: DashboardEnseignant.hintColor,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+
+                                  const SizedBox(height: 8),
+
+                                  // Classe et statistiques
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(
+                                            color: DashboardEnseignant.primaryColor.withOpacity(0.2),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          data['schoolClass'] ?? 'Classe non spécifiée',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w600,
+                                            color: DashboardEnseignant.primaryColor,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: getPercentageLightColor(),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          '$presentCount/$totalStudents étudiants',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: getPercentageColor(),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            // Indicateur de navigation
+                            Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    DashboardEnseignant.primaryColor,
+                                    DashboardEnseignant.secondaryColor,
+                                  ],
+                                ),
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: DashboardEnseignant.primaryColor.withOpacity(0.3),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                Icons.arrow_forward_ios_rounded,
+                                color: Colors.white,
+                                size: 14,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ],
+                ),
               ),
-            ],
-          ),
-          trailing: Icon(Icons.arrow_forward_ios_rounded, size: 16),
-          onTap: () => _openHistoryDetails(data, historyId),
+            ),
+
+            // Badge "Nouveau" pour les éléments récents
+            if (DateTime.now().difference(date).inDays < 1)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.green.shade400,
+                        Colors.green.shade600,
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.green.withOpacity(0.3),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    'AUJOURD\'HUI',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       );
     } catch (e) {
       print('❌ Erreur affichage carte historique: $e');
-      return Card(
-        margin: EdgeInsets.only(bottom: 12),
-        child: ListTile(
-          leading: Icon(Icons.error_outline_rounded, color: Colors.red),
-          title: Text('Erreur d\'affichage'),
-          subtitle: Text('Données corrompues'),
-        ),
-      );
+      return _buildErrorHistoryCard();
     }
   }
+
 
   Widget _buildProfilPage() {
     return SingleChildScrollView(
@@ -979,10 +1235,8 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // PHOTO DE PROFIL AVEC UPLOAD
                 _buildProfilePhotoSection(),
                 const SizedBox(height: 16),
-                // StreamBuilder pour le nom dans le profil
                 StreamBuilder<String?>(
                   stream: getUserNameStream(),
                   builder: (context, snapshot) {
@@ -1015,10 +1269,19 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                 const SizedBox(height: 20),
                 Divider(color: Colors.grey.shade300),
                 const SizedBox(height: 20),
-                _buildProfileInfoItem(
-                    Icons.email_outlined,
-                    "Email",
-                    _userEmail ?? "Chargement..."
+                StreamBuilder<String?>(
+                  stream: getUserEmailStream(),
+                  builder: (context, snapshot) {
+                    final userEmail = snapshot.hasData && snapshot.data != null
+                        ? snapshot.data!
+                        : _userEmail ?? widget.userEmail;
+
+                    return _buildProfileInfoItem(
+                        Icons.email_outlined,
+                        "Email",
+                        userEmail ?? "Chargement..."
+                    );
+                  },
                 ),
                 const SizedBox(height: 30),
                 SizedBox(
@@ -1146,7 +1409,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     );
   }
 
-  // AVATAR PAR DÉFAUT
   Widget _buildDefaultProfileAvatar() {
     return Container(
       decoration: BoxDecoration(
@@ -1161,7 +1423,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     );
   }
 
-  // OPTIONS POUR LA PHOTO
   void _showPhotoOptions(BuildContext context, StateSetter setState) {
     showModalBottomSheet(
       context: context,
@@ -1292,24 +1553,21 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isSmallCard = constraints.maxWidth < 600;
+        final isSmallCard = constraints.maxWidth < 800;
         final isTablet = constraints.maxWidth > 600;
 
         return Stack(
           children: [
-            // Carte principale avec effet 3D
             Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: [
-                  // Ombre portée pour effet de profondeur
                   BoxShadow(
                     color: DashboardEnseignant.primaryColor.withOpacity(0.15),
                     blurRadius: 20,
                     offset: const Offset(0, 8),
                     spreadRadius: -2,
                   ),
-                  // Ombre interne pour effet d'élévation
                   BoxShadow(
                     color: Colors.black.withOpacity(0.05),
                     blurRadius: 6,
@@ -1359,357 +1617,337 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                         splashColor: DashboardEnseignant.primaryColor.withOpacity(0.1),
                         highlightColor: DashboardEnseignant.primaryColor.withOpacity(0.05),
                         child: Container(
-                          padding: EdgeInsets.all(isSmallCard ? 14 : isTablet ? 20 : 18),
+                          padding: EdgeInsets.all(isSmallCard ? 4 : isTablet ? 16 : 14),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(20),
-                            // Effet de bordure lumineuse
                             border: Border.all(
                               color: Colors.white.withOpacity(0.3),
                               width: 0.5,
                             ),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // En-tête avec icône et compteur d'étudiants
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  // Icône avec effet 3D
-                                  Container(
-                                    width: isSmallCard ? 36 : isTablet ? 50 : 44,
-                                    height: isSmallCard ? 36 : isTablet ? 50 : 44,
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                        colors: [
-                                          DashboardEnseignant.primaryColor.withOpacity(0.15),
-                                          DashboardEnseignant.secondaryColor.withOpacity(0.1),
-                                        ],
-                                      ),
-                                      borderRadius: BorderRadius.circular(12),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: DashboardEnseignant.primaryColor.withOpacity(0.1),
-                                          blurRadius: 8,
-                                          offset: const Offset(2, 2),
-                                        ),
-                                        BoxShadow(
-                                          color: Colors.white.withOpacity(0.5),
-                                          blurRadius: 8,
-                                          offset: const Offset(-2, -2),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Stack(
-                                      children: [
-                                        // Effet de brillance
-                                        Positioned(
-                                          top: 4,
-                                          left: 4,
-                                          child: Container(
-                                            width: isSmallCard ? 8 : 12,
-                                            height: isSmallCard ? 8 : 12,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              color: Colors.white.withOpacity(0.3),
-                                            ),
-                                          ),
-                                        ),
-                                        Center(
-                                          child: Icon(
-                                            currentIcon,
-                                            size: isSmallCard ? 18 : isTablet ? 24 : 22,
-                                            color: DashboardEnseignant.primaryColor,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-
-                                  // Badge étudiant avec effet 3D
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.topCenter,
-                                        end: Alignment.bottomCenter,
-                                        colors: [
-                                          Colors.white.withOpacity(0.9),
-                                          Colors.grey.shade100,
-                                        ],
-                                      ),
-                                      borderRadius: BorderRadius.circular(10),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.05),
-                                          blurRadius: 4,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
-                                      border: Border.all(
-                                        color: Colors.white.withOpacity(0.4),
-                                        width: 1,
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.group_rounded,
-                                          size: isSmallCard ? 12 : 14,
-                                          color: DashboardEnseignant.primaryColor,
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          studentCount.toString(),
-                                          style: TextStyle(
-                                            fontSize: isSmallCard ? 10 : 12,
-                                            fontWeight: FontWeight.w700,
-                                            color: DashboardEnseignant.textColor,
-                                            shadows: [
-                                              Shadow(
-                                                color: Colors.white.withOpacity(0.8),
-                                                blurRadius: 2,
-                                                offset: const Offset(0, 1),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-
-                              SizedBox(height: isSmallCard ? 10 : isTablet ? 16 : 14),
-
-                              // Nom de la séance avec effet de profondeur
-                              ShaderMask(
-                                shaderCallback: (bounds) {
-                                  return LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      DashboardEnseignant.textColor,
-                                      DashboardEnseignant.textColor.withOpacity(0.8),
-                                    ],
-                                  ).createShader(bounds);
-                                },
-                                child: Text(
-                                  (data['nom'] as String?) ?? 'Sans nom',
-                                  style: TextStyle(
-                                    fontSize: isSmallCard ? 14 : isTablet ? 18 : 16,
-                                    fontWeight: FontWeight.w800,
-                                    height: 1.2,
-                                    letterSpacing: -0.3,
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-
-                              SizedBox(height: isSmallCard ? 8 : isTablet ? 12 : 10),
-
-                              // Badge classe avec effet 3D
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.centerLeft,
-                                    end: Alignment.centerRight,
-                                    colors: [
-                                      DashboardEnseignant.secondaryColor.withOpacity(0.1),
-                                      DashboardEnseignant.primaryColor.withOpacity(0.05),
-                                    ],
-                                  ),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: DashboardEnseignant.secondaryColor.withOpacity(0.2),
-                                    width: 1,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
+                          child: SingleChildScrollView(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
                                     Container(
-                                      padding: const EdgeInsets.all(2),
+                                      width: isSmallCard ? 36 : isTablet ? 55 : 55,
+                                      height: isSmallCard ? 36 : isTablet ? 55 : 55,
                                       decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: DashboardEnseignant.secondaryColor.withOpacity(0.2),
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                          colors: [
+                                            DashboardEnseignant.primaryColor.withOpacity(0.15),
+                                            DashboardEnseignant.secondaryColor.withOpacity(0.1),
+                                          ],
+                                        ),
+                                        borderRadius: BorderRadius.circular(12),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: DashboardEnseignant.primaryColor.withOpacity(0.1),
+                                            blurRadius: 8,
+                                            offset: const Offset(2, 2),
+                                          ),
+                                          BoxShadow(
+                                            color: Colors.white.withOpacity(0.5),
+                                            blurRadius: 8,
+                                            offset: const Offset(-2, -2),
+                                          ),
+                                        ],
                                       ),
-                                      child: Icon(
-                                        Icons.school_rounded,
-                                        size: isSmallCard ? 10 : 12,
-                                        color: DashboardEnseignant.secondaryColor,
+                                      child: Stack(
+                                        children: [
+                                          Positioned(
+                                            top: 4,
+                                            left: 4,
+                                            child: Container(
+                                              width: isSmallCard ? 8 : 12,
+                                              height: isSmallCard ? 8 : 12,
+                                              decoration: BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                color: Colors.white.withOpacity(0.3),
+                                              ),
+                                            ),
+                                          ),
+                                          Center(
+                                            child: Icon(
+                                              currentIcon,
+                                              size: isSmallCard ? 19 : isTablet ? 24 : 22,
+                                              color: DashboardEnseignant.primaryColor,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        schoolClassName,
-                                        style: TextStyle(
-                                          fontSize: isSmallCard ? 10 : 11,
-                                          fontWeight: FontWeight.w600,
-                                          color: DashboardEnseignant.secondaryColor,
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Colors.white.withOpacity(0.9),
+                                            Colors.grey.shade100,
+                                          ],
                                         ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+                                        borderRadius: BorderRadius.circular(10),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(0.05),
+                                            blurRadius: 4,
+                                            offset: const Offset(0, 2),
+                                          ),
+                                        ],
+                                        border: Border.all(
+                                          color: Colors.white.withOpacity(0.4),
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.group_rounded,
+                                            size: isSmallCard ? 12 : 14,
+                                            color: DashboardEnseignant.primaryColor,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            studentCount.toString(),
+                                            style: TextStyle(
+                                              fontSize: isSmallCard ? 10 : 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: DashboardEnseignant.textColor,
+                                              shadows: [
+                                                Shadow(
+                                                  color: Colors.white.withOpacity(0.8),
+                                                  blurRadius: 2,
+                                                  offset: const Offset(0, 1),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
                                 ),
-                              ),
-
-                              SizedBox(height: isSmallCard ? 8 : isTablet ? 12 : 10),
-
-                              // Informations date et heure avec icônes 3D
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.3),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.4),
+                                SizedBox(height: isSmallCard ? 8 : isTablet ? 14 : 12),
+                                ShaderMask(
+                                  shaderCallback: (bounds) {
+                                    return LinearGradient(
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                      colors: [
+                                        DashboardEnseignant.textColor,
+                                        DashboardEnseignant.textColor.withOpacity(0.8),
+                                      ],
+                                    ).createShader(bounds);
+                                  },
+                                  child: Text(
+                                    (data['nom'] as String?) ?? 'Sans nom',
+                                    style: TextStyle(
+                                      fontSize: isSmallCard ? 14 : isTablet ? 18 : 16,
+                                      fontWeight: FontWeight.w800,
+                                      height: 1.2,
+                                      letterSpacing: -0.3,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                                child: Column(
-                                  children: [
-                                    // Date
-                                    Row(
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.all(4),
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            color: DashboardEnseignant.primaryColor.withOpacity(0.1),
-                                          ),
-                                          child: Icon(
-                                            Icons.calendar_today_rounded,
-                                            size: isSmallCard ? 10 : 12,
-                                            color: DashboardEnseignant.primaryColor,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Expanded(
-                                          child: Text(
-                                            jourAffiche,
-                                            style: TextStyle(
-                                              fontSize: isSmallCard ? 10 : 12,
-                                              fontWeight: FontWeight.w500,
-                                              color: DashboardEnseignant.textColor,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
+                                SizedBox(height: isSmallCard ? 6 : isTablet ? 10 : 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.centerLeft,
+                                      end: Alignment.centerRight,
+                                      colors: [
+                                        DashboardEnseignant.secondaryColor.withOpacity(0.1),
+                                        DashboardEnseignant.primaryColor.withOpacity(0.05),
                                       ],
                                     ),
-
-                                    if (data['horaireDebut'] != null && data['horaireFin'] != null) ...[
-                                      SizedBox(height: isSmallCard ? 4 : 6),
-                                      // Horaire
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: DashboardEnseignant.secondaryColor.withOpacity(0.2),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(2),
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: DashboardEnseignant.secondaryColor.withOpacity(0.2),
+                                        ),
+                                        child: Icon(
+                                          Icons.school_rounded,
+                                          size: isSmallCard ? 10 : 12,
+                                          color: DashboardEnseignant.secondaryColor,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          schoolClassName,
+                                          style: TextStyle(
+                                            fontSize: isSmallCard ? 10 : 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: DashboardEnseignant.secondaryColor,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                SizedBox(height: isSmallCard ? 6 : isTablet ? 10 : 8),
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.3),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.4),
+                                    ),
+                                  ),
+                                  child: Column(
+                                    children: [
                                       Row(
                                         children: [
                                           Container(
                                             padding: const EdgeInsets.all(4),
                                             decoration: BoxDecoration(
                                               shape: BoxShape.circle,
-                                              color: DashboardEnseignant.secondaryColor.withOpacity(0.1),
+                                              color: DashboardEnseignant.primaryColor.withOpacity(0.1),
                                             ),
                                             child: Icon(
-                                              Icons.access_time_rounded,
+                                              Icons.calendar_today_rounded,
                                               size: isSmallCard ? 10 : 12,
-                                              color: DashboardEnseignant.secondaryColor,
+                                              color: DashboardEnseignant.primaryColor,
                                             ),
                                           ),
                                           const SizedBox(width: 6),
-                                          Text(
-                                            '${data['horaireDebut']} - ${data['horaireFin']}',
-                                            style: TextStyle(
-                                              fontSize: isSmallCard ? 10 : 12,
-                                              fontWeight: FontWeight.w500,
-                                              color: DashboardEnseignant.textColor,
+                                          Expanded(
+                                            child: Text(
+                                              jourAffiche,
+                                              style: TextStyle(
+                                                fontSize: isSmallCard ? 10 : 12,
+                                                fontWeight: FontWeight.w500,
+                                                color: DashboardEnseignant.textColor,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
                                         ],
                                       ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-
-                              const Spacer(),
-
-                              // Séparateur avec effet de profondeur
-                              Container(
-                                height: 1,
-                                margin: const EdgeInsets.only(bottom: 8),
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.centerLeft,
-                                    end: Alignment.centerRight,
-                                    colors: [
-                                      Colors.transparent,
-                                      Colors.white.withOpacity(0.5),
-                                      Colors.transparent,
+                                      if (data['horaireDebut'] != null && data['horaireFin'] != null) ...[
+                                        SizedBox(height: isSmallCard ? 4 : 6),
+                                        Row(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.all(4),
+                                              decoration: BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                color: DashboardEnseignant.secondaryColor.withOpacity(0.1),
+                                              ),
+                                              child: Icon(
+                                                Icons.access_time_rounded,
+                                                size: isSmallCard ? 10 : 12,
+                                                color: DashboardEnseignant.secondaryColor,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              '${data['horaireDebut']} - ${data['horaireFin']}',
+                                              style: TextStyle(
+                                                fontSize: isSmallCard ? 10 : 12,
+                                                fontWeight: FontWeight.w500,
+                                                color: DashboardEnseignant.textColor,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
                                     ],
                                   ),
                                 ),
-                              ),
-
-                              // Footer avec CTA
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4),
-                                child: Row(
-                                  children: [
-                                    Text(
-                                      'Voir les présences',
-                                      style: TextStyle(
-                                        fontSize: isSmallCard ? 9 : 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: DashboardEnseignant.primaryColor,
-                                        shadows: [
-                                          Shadow(
-                                            color: Colors.white.withOpacity(0.8),
-                                            blurRadius: 2,
-                                            offset: const Offset(0, 1),
-                                          ),
-                                        ],
-                                      ),
+                                SizedBox(height: isSmallCard ? 8 : isTablet ? 12 : 10),
+                                Container(
+                                  height: 1,
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.centerLeft,
+                                      end: Alignment.centerRight,
+                                      colors: [
+                                        Colors.transparent,
+                                        Colors.white.withOpacity(0.5),
+                                        Colors.transparent,
+                                      ],
                                     ),
-                                    const Spacer(),
-                                    Container(
-                                      padding: const EdgeInsets.all(4),
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        gradient: LinearGradient(
-                                          begin: Alignment.topLeft,
-                                          end: Alignment.bottomRight,
-                                          colors: [
-                                            DashboardEnseignant.primaryColor,
-                                            DashboardEnseignant.secondaryColor,
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        'Voir les présences',
+                                        style: TextStyle(
+                                          fontSize: isSmallCard ? 9 : 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: DashboardEnseignant.primaryColor,
+                                          shadows: [
+                                            Shadow(
+                                              color: Colors.white.withOpacity(0.3),
+                                              blurRadius: 2,
+                                              offset: const Offset(0, 1),
+                                            ),
                                           ],
                                         ),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: DashboardEnseignant.primaryColor.withOpacity(0.3),
-                                            blurRadius: 4,
-                                            offset: const Offset(0, 2),
+                                      ),
+                                      const Spacer(),
+                                      Container(
+                                        padding: const EdgeInsets.all(4),
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          gradient: LinearGradient(
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                            colors: [
+                                              DashboardEnseignant.primaryColor,
+                                              DashboardEnseignant.secondaryColor,
+                                            ],
                                           ),
-                                        ],
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: DashboardEnseignant.primaryColor.withOpacity(0.3),
+                                              blurRadius: 4,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Icon(
+                                          Icons.arrow_forward_ios_rounded,
+                                          size: isSmallCard ? 10 : 12,
+                                          color: Colors.white,
+                                        ),
                                       ),
-                                      child: Icon(
-                                        Icons.arrow_forward_ios_rounded,
-                                        size: isSmallCard ? 10 : 12,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -1718,8 +1956,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                 ),
               ),
             ),
-
-            // Boutons d'action (suppression/modification) avec effet 3D
             if (_isDeleteMode)
               Positioned(
                 top: 8,
@@ -1771,7 +2007,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                   ),
                 ),
               ),
-
             if (_isEditMode)
               Positioned(
                 top: 8,
@@ -1817,6 +2052,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       },
     );
   }
+
   Widget _build3DConfirmationDialog() {
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -1845,7 +2081,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Icône d'avertissement 3D
               Container(
                 width: 60,
                 height: 60,
@@ -1873,9 +2108,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                   size: 30,
                 ),
               ),
-
               const SizedBox(height: 16),
-
               Text(
                 'Supprimer la séance',
                 style: TextStyle(
@@ -1884,9 +2117,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                   color: DashboardEnseignant.textColor,
                 ),
               ),
-
               const SizedBox(height: 8),
-
               Text(
                 'Cette action est irréversible. Voulez-vous vraiment supprimer cette séance ?',
                 textAlign: TextAlign.center,
@@ -1895,9 +2126,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                   fontSize: 14,
                 ),
               ),
-
               const SizedBox(height: 24),
-
               Row(
                 children: [
                   Expanded(
@@ -1927,9 +2156,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                       ),
                     ),
                   ),
-
                   const SizedBox(width: 12),
-
                   Expanded(
                     child: Container(
                       decoration: BoxDecoration(
@@ -1965,7 +2192,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       ),
     );
   }
-  // AJOUTEZ cette méthode pour l'avatar de fallback dans l'AppBar
+
   Widget _buildAppBarFallbackAvatar(bool isSmallScreen) {
     return Container(
       decoration: BoxDecoration(
@@ -1981,7 +2208,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
   }
 
   @override
-
   Widget build(BuildContext context) {
     final pages = _buildPages();
     return Scaffold(
@@ -1996,14 +2222,12 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
 
             return GestureDetector(
               onTap: () {
-                // Naviguer vers la page Profil
                 setState(() {
                   _selectedIndex = 2;
                 });
               },
               child: Row(
                 children: [
-                  // StreamBuilder pour la photo de profil
                   StreamBuilder<String?>(
                     stream: getProfilePictureStream(),
                     builder: (context, snapshot) {
@@ -2043,7 +2267,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                     },
                   ),
                   SizedBox(width: isSmallScreen ? 8 : 12),
-                  // StreamBuilder pour le nom
                   StreamBuilder<String?>(
                     stream: getUserNameStream(),
                     builder: (context, snapshot) {
@@ -2089,7 +2312,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
 
                 return isSmallScreen
                     ? IconButton(
-                  onPressed: () => Navigator.pushReplacementNamed(context, 'login'),
+                  onPressed: () => _showLogoutConfirmation(),
                   icon: Icon(
                     Icons.logout_rounded,
                     size: 20,
@@ -2097,7 +2320,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                   ),
                 )
                     : TextButton.icon(
-                  onPressed: () => Navigator.pushReplacementNamed(context, 'login'),
+                  onPressed: () => _showLogoutConfirmation(),
                   icon: Icon(
                     Icons.logout_rounded,
                     size: 16,
@@ -2196,17 +2419,188 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       ),
     );
   }
+
+  void _showLogoutConfirmation() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                DashboardEnseignant.surfaceColor.withOpacity(0.95),
+                DashboardEnseignant.backgroundColor.withOpacity(0.9),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(25),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 30,
+                offset: const Offset(0, 15),
+                spreadRadius: 2,
+              ),
+              BoxShadow(
+                color: Colors.white.withOpacity(0.1),
+                blurRadius: 10,
+                offset: const Offset(-5, -5),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.red.shade400,
+                        Colors.red.shade600,
+                      ],
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.red.withOpacity(0.4),
+                        blurRadius: 20,
+                        offset: const Offset(0, 8),
+                      ),
+                      BoxShadow(
+                        color: Colors.white.withOpacity(0.2),
+                        blurRadius: 10,
+                        offset: const Offset(-3, -3),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.logout_rounded,
+                    color: Colors.white,
+                    size: 32,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Déconnexion',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    color: DashboardEnseignant.textColor,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Êtes-vous sûr de vouloir vous déconnecter ?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: DashboardEnseignant.hintColor,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 25),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(15),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.15),
+                              blurRadius: 10,
+                              offset: const Offset(0, 5),
+                            ),
+                          ],
+                        ),
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: DashboardEnseignant.textColor,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            textStyle: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          child: const Text('Annuler'),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(15),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.red.withOpacity(0.4),
+                              blurRadius: 15,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pushReplacementNamed(context, 'login'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            textStyle: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          child: const Text('Déconnexion'),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class SchoolClassSelection {
   final String id;
   final String name;
+  final String level;
   final List<String> studentUids;
   bool isSelected;
 
   SchoolClassSelection({
     required this.id,
     required this.name,
+    required this.level,
     required this.studentUids,
     this.isSelected = false,
   });
@@ -2245,6 +2639,9 @@ class _EditClassDialogState extends State<EditClassDialog> {
   List<SchoolClassSelection> allSchoolClasses = [];
   SchoolClassSelection? _selectedClass;
   StreamSubscription<QuerySnapshot>? _classesSubscription;
+
+  String? _selectedYear;
+  final List<String> _years = ['1ère année', '2ème année', '3ème année'];
 
   final Color _primaryColor = const Color(0xFF6366F1);
   final Color _backgroundColor = const Color(0xFFF8FAFD);
@@ -2332,6 +2729,7 @@ class _EditClassDialogState extends State<EditClassDialog> {
     for (final doc in snapshot.docs) {
       final data = doc.data() as Map<String, dynamic>;
       final className = data['name'] ?? 'Classe sans nom';
+      final classLevel = data['level'] ?? 'Non spécifié';
 
       List<String> studentUids = [];
       if (data['students'] != null && data['students'] is List) {
@@ -2345,12 +2743,14 @@ class _EditClassDialogState extends State<EditClassDialog> {
       updatedClasses.add(SchoolClassSelection(
         id: doc.id,
         name: className,
+        level: classLevel,
         studentUids: studentUids,
         isSelected: isCurrentlySelected,
       ));
 
       if (isCurrentlySelected && _selectedClass == null) {
         _selectedClass = updatedClasses.last;
+        _selectedYear = classLevel;
       }
     }
 
@@ -2383,12 +2783,26 @@ class _EditClassDialogState extends State<EditClassDialog> {
     }
   }
 
+  void _onYearChanged(String? newYear) {
+    setState(() {
+      _selectedYear = newYear;
+      _selectedClass = null;
+    });
+  }
+
   List<SchoolClassSelection> get filteredClasses {
-    if (searchClassQuery.isEmpty) return allSchoolClasses;
-    final query = searchClassQuery.toLowerCase();
-    return allSchoolClasses
-        .where((c) => c.name.toLowerCase().contains(query))
-        .toList();
+    List<SchoolClassSelection> filtered = allSchoolClasses;
+
+    if (_selectedYear != null) {
+      filtered = filtered.where((c) => c.level == _selectedYear).toList();
+    }
+
+    if (searchClassQuery.isNotEmpty) {
+      final query = searchClassQuery.toLowerCase();
+      filtered = filtered.where((c) => c.name.toLowerCase().contains(query)).toList();
+    }
+
+    return filtered;
   }
 
   Future<void> _selectDay() async {
@@ -2527,12 +2941,32 @@ class _EditClassDialogState extends State<EditClassDialog> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        '${schoolClass.studentUids.length} étudiant${schoolClass.studentUids.length > 1 ? 's' : ''}',
-                        style: TextStyle(
-                          color: isSelected ? _primaryColor.withOpacity(0.8) : _hintColor,
-                          fontSize: 11,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            '${schoolClass.studentUids.length} étudiant${schoolClass.studentUids.length > 1 ? 's' : ''}',
+                            style: TextStyle(
+                              color: isSelected ? _primaryColor.withOpacity(0.8) : _hintColor,
+                              fontSize: 11,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _primaryColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              schoolClass.level,
+                              style: TextStyle(
+                                color: _primaryColor,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -2594,7 +3028,6 @@ class _EditClassDialogState extends State<EditClassDialog> {
     setState(() => _isSaving = true);
 
     try {
-      // CRÉATION DES DATES COMPLÈTES POUR L'HORAIRE
       final dateDebut = DateTime(
         _selectedDate!.year,
         _selectedDate!.month,
@@ -2619,7 +3052,6 @@ class _EditClassDialogState extends State<EditClassDialog> {
         'dateFin': Timestamp.fromDate(dateFin),
         'horaireDebut': _heureDebutCtrl.text,
         'horaireFin': _heureFinCtrl.text,
-        // Réinitialiser les flags de session pour permettre une nouvelle session
         'todaySessionHappened': false,
         'lastSessionDate': FieldValue.delete(),
         'attendanceSessionId': FieldValue.delete(),
@@ -2724,7 +3156,6 @@ class _EditClassDialogState extends State<EditClassDialog> {
                 ],
               ),
             ),
-
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.all(20),
@@ -2744,7 +3175,6 @@ class _EditClassDialogState extends State<EditClassDialog> {
                           ),
                         ),
                         const SizedBox(height: 16),
-
                         TextFormField(
                           controller: _jourCtrl,
                           readOnly: true,
@@ -2764,7 +3194,6 @@ class _EditClassDialogState extends State<EditClassDialog> {
                           onTap: _selectDay,
                         ),
                         const SizedBox(height: 16),
-
                         Row(
                           children: [
                             Expanded(
@@ -2813,7 +3242,6 @@ class _EditClassDialogState extends State<EditClassDialog> {
                       ],
                     ),
                     const SizedBox(height: 24),
-
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2853,7 +3281,34 @@ class _EditClassDialogState extends State<EditClassDialog> {
                             ],
                           ),
                           const SizedBox(height: 12),
-
+                          DropdownButtonFormField<String>(
+                            decoration: InputDecoration(
+                              labelText: 'Filtrer par année',
+                              labelStyle: TextStyle(color: _hintColor, fontSize: 13),
+                              filled: true,
+                              fillColor: _backgroundColor,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide.none,
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            ),
+                            value: _selectedYear,
+                            items: [
+                              DropdownMenuItem(
+                                value: null,
+                                child: Text('Toutes les années', style: TextStyle(color: _hintColor, fontSize: 13)),
+                              ),
+                              ..._years.map((year) {
+                                return DropdownMenuItem(
+                                  value: year,
+                                  child: Text(year, style: TextStyle(fontSize: 13)),
+                                );
+                              }).toList(),
+                            ],
+                            onChanged: _onYearChanged,
+                          ),
+                          const SizedBox(height: 12),
                           if (_selectedClass != null)
                             Container(
                               padding: const EdgeInsets.all(8),
@@ -2880,12 +3335,32 @@ class _EditClassDialogState extends State<EditClassDialog> {
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
-                                        Text(
-                                          '${_selectedClass!.studentUids.length} étudiant${_selectedClass!.studentUids.length > 1 ? 's' : ''}',
-                                          style: TextStyle(
-                                            color: _primaryColor.withOpacity(0.8),
-                                            fontSize: 11,
-                                          ),
+                                        Row(
+                                          children: [
+                                            Text(
+                                              '${_selectedClass!.studentUids.length} étudiant${_selectedClass!.studentUids.length > 1 ? 's' : ''}',
+                                              style: TextStyle(
+                                                color: _primaryColor.withOpacity(0.8),
+                                                fontSize: 11,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: _primaryColor.withOpacity(0.1),
+                                                borderRadius: BorderRadius.circular(4),
+                                              ),
+                                              child: Text(
+                                                _selectedClass!.level,
+                                                style: TextStyle(
+                                                  color: _primaryColor,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ],
                                     ),
@@ -2903,7 +3378,6 @@ class _EditClassDialogState extends State<EditClassDialog> {
                               ),
                             ),
                           const SizedBox(height: 12),
-
                           TextFormField(
                             decoration: InputDecoration(
                               labelText: 'Rechercher une classe...',
@@ -2920,7 +3394,24 @@ class _EditClassDialogState extends State<EditClassDialog> {
                             onChanged: (v) => setState(() => searchClassQuery = v),
                           ),
                           const SizedBox(height: 12),
-
+                          if (_selectedYear != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.filter_alt_rounded, size: 14, color: _primaryColor),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Filtré: $_selectedYear',
+                                    style: TextStyle(
+                                      color: _primaryColor,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           Expanded(
                             child: Container(
                               decoration: BoxDecoration(
@@ -2957,7 +3448,9 @@ class _EditClassDialogState extends State<EditClassDialog> {
                                     Icon(Icons.search_off_rounded, size: 40, color: _hintColor),
                                     const SizedBox(height: 8),
                                     Text(
-                                      'Aucune classe trouvée',
+                                      _selectedYear != null
+                                          ? 'Aucune classe trouvée en $_selectedYear'
+                                          : 'Aucune classe trouvée',
                                       style: TextStyle(color: _hintColor, fontSize: 12),
                                     ),
                                     const SizedBox(height: 4),
@@ -2984,7 +3477,6 @@ class _EditClassDialogState extends State<EditClassDialog> {
                 ),
               ),
             ),
-
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -3052,12 +3544,14 @@ class _EditClassDialogState extends State<EditClassDialog> {
 class EditProfileDialog extends StatefulWidget {
   final String userUid;
   final String currentName;
+  final String currentEmail;
   final Function(String)? onProfileUpdated;
 
   const EditProfileDialog({
     Key? key,
     required this.userUid,
     required this.currentName,
+    required this.currentEmail,
     this.onProfileUpdated,
   }) : super(key: key);
 
@@ -3067,6 +3561,7 @@ class EditProfileDialog extends StatefulWidget {
 
 class _EditProfileDialogState extends State<EditProfileDialog> {
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isSaving = false;
 
@@ -3081,11 +3576,13 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
   void initState() {
     super.initState();
     _nameController.text = widget.currentName;
+    _emailController.text = widget.currentEmail;
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _emailController.dispose();
     super.dispose();
   }
 
@@ -3094,40 +3591,41 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
       setState(() => _isSaving = true);
 
       try {
-        // Mettre à jour dans Firestore avec le champ "nom"
+        final String newEmail = _emailController.text.trim();
+        final String currentEmail = widget.currentEmail;
+
+        // Si l'email a changé, mettre à jour Firebase Auth
+        if (newEmail != currentEmail) {
+          await _updateAuthEmail(newEmail);
+        }
+
+        // Mettre à jour Firestore
         await FirebaseFirestore.instance
             .collection('users')
             .doc(widget.userUid)
             .update({
           'nom': _nameController.text.trim(),
+          'email': newEmail,
           'updatedAt': FieldValue.serverTimestamp(),
         });
 
-        // Afficher un message de succès
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('Profil mis à jour avec succès ✅'),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             backgroundColor: _primaryColor,
           ),
         );
 
-        // Notifier le parent du changement
         widget.onProfileUpdated?.call(_nameController.text.trim());
 
-        // Fermer la boîte de dialogue
         if (mounted) {
           Navigator.pop(context);
         }
 
       } catch (e) {
-        // Afficher un message d'erreur
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Erreur lors de la mise à jour: $e'),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            content: Text('Erreur: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -3139,6 +3637,50 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
     }
   }
 
+  Future<void> _updateAuthEmail(String newEmail) async {
+    try {
+      User? user = FirebaseAuth.instance.currentUser;
+
+      if (user != null) {
+        // Cette méthode envoie un email de vérification
+        await user.verifyBeforeUpdateEmail(newEmail);
+
+        // Afficher un message informatif
+        _showVerificationDialog(newEmail);
+      }
+    } catch (e) {
+      throw Exception("Erreur lors de la mise à jour de l'email: ${e.toString()}");
+    }
+  }
+
+  void _showVerificationDialog(String newEmail) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.email_outlined, color: _primaryColor),
+            SizedBox(width: 8),
+            Text("Vérification requise"),
+          ],
+        ),
+        content: Text(
+          "Un email de vérification a été envoyé à:\n\n$newEmail\n\n"
+              "Vous devez cliquer sur le lien dans cet email pour confirmer votre nouvel email.\n\n"
+              "Après vérification, vous pourrez vous connecter avec ce nouvel email.",
+          style: TextStyle(fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("J'ai compris", style: TextStyle(color: _primaryColor)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -3148,7 +3690,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(
           maxWidth: 500,
-          maxHeight: 400,
+          maxHeight: 500,
         ),
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -3201,6 +3743,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Champ Nom
                     Text(
                       'Nom d\'utilisateur',
                       style: TextStyle(
@@ -3243,10 +3786,57 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                         fontSize: 11,
                       ),
                     ),
+
+                    const SizedBox(height: 20),
+
+                    // Champ Email
+                    Text(
+                      'Adresse email principale',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: _textColor,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _emailController,
+                      style: TextStyle(color: _textColor, fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: 'Entrez votre email',
+                        hintStyle: TextStyle(color: _hintColor, fontSize: 13),
+                        filled: true,
+                        fillColor: _backgroundColor,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        prefixIcon: Icon(Icons.email_outlined, color: _primaryColor, size: 18),
+                      ),
+                      keyboardType: TextInputType.emailAddress,
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Veuillez entrer un email';
+                        }
+                        if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value)) {
+                          return 'Veuillez entrer un email valide';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Cette email sera utilisé pour la connexion',
+                      style: TextStyle(
+                        color: _hintColor,
+                        fontSize: 11,
+                      ),
+                    ),
                   ],
                 ),
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 12),
 
               // Boutons d'action
               Row(
