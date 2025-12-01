@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'admin_create_class_page.dart';
 import 'admin_manage_classes.dart';
 import 'admin_manage_sessions.dart';
@@ -16,13 +17,66 @@ class AdminHomePage extends StatelessWidget {
     required this.userUid,
   }) : super(key: key);
 
+  Future<void> _logout(BuildContext context) async {
+    try {
+      await FirebaseAuth.instance.signOut();
+      Navigator.pushReplacementNamed(context, 'login');
+    } catch (e) {
+      print('Erreur lors de la déconnexion: $e');
+    }
+  }
+
+  void _showLogoutConfirmation(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.logout_rounded, color: Colors.red),
+            SizedBox(width: 8),
+            Text(
+              'Déconnexion',
+              style: TextStyle(
+                color: Color(0xFF0D47A1),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Êtes-vous sûr de vouloir vous déconnecter ?',
+          style: TextStyle(color: Colors.grey),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'Annuler',
+              style: TextStyle(color: Colors.grey),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => _logout(context),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Déconnexion'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xFFF8FAFD),
+      backgroundColor: const Color(0xFFF8FAFD),
       body: Column(
         children: [
-          // AppBar personnalisée réduite (conservée telle quelle)
+          // AppBar personnalisée réduite
           Container(
             width: double.infinity,
             padding: const EdgeInsets.only(
@@ -37,7 +91,7 @@ class AdminHomePage extends StatelessWidget {
                 BoxShadow(
                   color: Colors.black12,
                   blurRadius: 8,
-                  offset: Offset(0, 2),
+                  offset: const Offset(0, 2),
                 ),
               ],
             ),
@@ -46,11 +100,11 @@ class AdminHomePage extends StatelessWidget {
                 Container(
                   width: 45,
                   height: 45,
-                  decoration: BoxDecoration(
-                    color: Color(0xFF0c6fdf ),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF0c6fdf),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(Icons.admin_panel_settings, color: Colors.white, size: 22),
+                  child: const Icon(Icons.admin_panel_settings, color: Colors.white, size: 22),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -77,13 +131,11 @@ class AdminHomePage extends StatelessWidget {
                   ),
                 ),
                 IconButton(
-                  onPressed: () {
-                    Navigator.pushReplacementNamed(context, 'login');
-                  },
-                  icon: Icon(Icons.logout, color: Color(0xFF0D47A1), size: 20),
+                  onPressed: () => _showLogoutConfirmation(context),
+                  icon: const Icon(Icons.logout, color: Color(0xFF0D47A1), size: 20),
                   tooltip: 'Déconnexion',
                   padding: EdgeInsets.zero,
-                  constraints: BoxConstraints(minWidth: 40),
+                  constraints: const BoxConstraints(minWidth: 40),
                 ),
               ],
             ),
@@ -100,7 +152,7 @@ class AdminHomePage extends StatelessWidget {
                     width: double.infinity,
                     padding: const EdgeInsets.all(25),
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
+                      gradient: const LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
@@ -111,15 +163,15 @@ class AdminHomePage extends StatelessWidget {
                       borderRadius: BorderRadius.circular(25),
                       boxShadow: [
                         BoxShadow(
-                          color: Color(0xFF0D47A1).withOpacity(0.15),
+                          color: const Color(0xFF0D47A1).withOpacity(0.15),
                           blurRadius: 25,
-                          offset: Offset(0, 12),
+                          offset: const Offset(0, 12),
                           spreadRadius: 2,
                         ),
                         BoxShadow(
                           color: Colors.white.withOpacity(0.9),
                           blurRadius: 15,
-                          offset: Offset(-5, -5),
+                          offset: const Offset(-5, -5),
                           spreadRadius: 1,
                         ),
                       ],
@@ -138,9 +190,9 @@ class AdminHomePage extends StatelessWidget {
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: [
                               BoxShadow(
-                                color: Color(0xFF0D47A1).withOpacity(0.25),
+                                color: const Color(0xFF0D47A1).withOpacity(0.25),
                                 blurRadius: 20,
-                                offset: Offset(0, 10),
+                                offset: const Offset(0, 10),
                                 spreadRadius: 2,
                               ),
                             ],
@@ -173,19 +225,10 @@ class AdminHomePage extends StatelessWidget {
                         ),
                         const SizedBox(height: 10),
 
-<<<<<<< HEAD
-                        
-                        const Text(
-                          "Bienvenue Admin",
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF0D47A1),
-=======
                         // Titre avec effet de profondeur
                         ShaderMask(
                           shaderCallback: (bounds) {
-                            return LinearGradient(
+                            return const LinearGradient(
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
                               colors: [
@@ -194,7 +237,7 @@ class AdminHomePage extends StatelessWidget {
                               ],
                             ).createShader(bounds);
                           },
-                          child: Text(
+                          child: const Text(
                             "Bienvenue Admin",
                             style: TextStyle(
                               fontSize: 24,
@@ -202,13 +245,20 @@ class AdminHomePage extends StatelessWidget {
                               color: Colors.white,
                               letterSpacing: 0.5,
                             ),
->>>>>>> f7fafc0 (e)
                           ),
                         ),
 
-
                         // Description
-
+                        const SizedBox(height: 8),
+                        Text(
+                          "Gérez facilement les classes, enseignants et étudiants",
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                            fontWeight: FontWeight.w500,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
                       ],
                     ),
                   ),
@@ -273,10 +323,7 @@ class AdminHomePage extends StatelessWidget {
                         },
                       ),
 
-                      // Dans la liste des boutons d'action, ajoutez :
                       const SizedBox(height: 18),
-
-                      // Dans admin_home_page.dart, remplacez le bouton existant par :
 
                       _build3DActionButton(
                         icon: Icons.schedule_rounded,
@@ -338,7 +385,7 @@ class AdminHomePage extends StatelessWidget {
           width: double.infinity,
           height: 80,
           decoration: BoxDecoration(
-            gradient: LinearGradient(
+            gradient: const LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [
@@ -349,15 +396,15 @@ class AdminHomePage extends StatelessWidget {
             borderRadius: BorderRadius.circular(18),
             boxShadow: [
               BoxShadow(
-                color: Color(0xFF0D47A1).withOpacity(0.15),
+                color: const Color(0xFF0D47A1).withOpacity(0.15),
                 blurRadius: 20,
-                offset: Offset(0, 8),
+                offset: const Offset(0, 8),
                 spreadRadius: 1,
               ),
               BoxShadow(
                 color: Colors.white.withOpacity(0.9),
                 blurRadius: 12,
-                offset: Offset(-6, -6),
+                offset: const Offset(-6, -6),
                 spreadRadius: 1,
               ),
             ],
@@ -396,7 +443,7 @@ class AdminHomePage extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
+                      gradient: const LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
@@ -407,15 +454,15 @@ class AdminHomePage extends StatelessWidget {
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: Color(0xFF0D47A1).withOpacity(0.3),
+                          color: const Color(0xFF0D47A1).withOpacity(0.3),
                           blurRadius: 12,
-                          offset: Offset(0, 6),
+                          offset: const Offset(0, 6),
                           spreadRadius: 1,
                         ),
                         BoxShadow(
                           color: Colors.white.withOpacity(0.2),
                           blurRadius: 8,
-                          offset: Offset(-2, -2),
+                          offset: const Offset(-2, -2),
                           spreadRadius: 1,
                         ),
                       ],
@@ -430,7 +477,7 @@ class AdminHomePage extends StatelessWidget {
                       children: [
                         Text(
                           title,
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
                             color: Color(0xFF0D47A1),
@@ -451,10 +498,10 @@ class AdminHomePage extends StatelessWidget {
                   ),
                   // Flèche avec effet de profondeur
                   Container(
-                    padding: EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: LinearGradient(
+                      gradient: const LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
@@ -466,11 +513,11 @@ class AdminHomePage extends StatelessWidget {
                         BoxShadow(
                           color: Colors.black12,
                           blurRadius: 6,
-                          offset: Offset(0, 3),
+                          offset: const Offset(0, 3),
                         ),
                       ],
                     ),
-                    child: Icon(Icons.arrow_forward_ios,
+                    child: const Icon(Icons.arrow_forward_ios,
                         color: Color(0xFF0D47A1), size: 16),
                   ),
                   const SizedBox(width: 18),

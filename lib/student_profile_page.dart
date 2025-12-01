@@ -1,6 +1,7 @@
 // lib/pages/student_profile_page.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:async';
 import 'dart:io';
@@ -576,13 +577,16 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
                       "Email",
                       _userEmail ?? "Chargement..."
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 20),
                   _buildAssociatedClassesSection(),
                   const SizedBox(height: 30),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: () => Navigator.pushReplacementNamed(context, 'login'),
+                      onPressed: () async {
+                        await FirebaseAuth.instance.signOut();
+                        Navigator.pushReplacementNamed(context, 'login');
+                      },
                       icon: Icon(Icons.logout_outlined, size: 18),
                       label: Text('Déconnexion'),
                       style: OutlinedButton.styleFrom(

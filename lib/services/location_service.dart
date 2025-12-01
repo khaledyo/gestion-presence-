@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 class LocationService {
   //location kelibia centre
-   //static const double _establishmentLatitude = 36.84374;
+  //static const double _establishmentLatitude = 36.84374;
   // static const double _establishmentLongitude = 11.09964;
 
   // COORDONNÉES DE  ÉTABLISSEMENT (Université)

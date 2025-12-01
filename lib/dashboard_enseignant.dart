@@ -52,6 +52,186 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     _fetchUserEmail();
   }
 
+  Future<void> _logout() async {
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, 'login');
+      }
+    } catch (e) {
+      print('Erreur lors de la déconnexion: $e');
+    }
+  }
+
+  void _showLogoutConfirmation() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                DashboardEnseignant.surfaceColor.withOpacity(0.95),
+                DashboardEnseignant.backgroundColor.withOpacity(0.9),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(25),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 30,
+                offset: const Offset(0, 15),
+                spreadRadius: 2,
+              ),
+              BoxShadow(
+                color: Colors.white.withOpacity(0.1),
+                blurRadius: 10,
+                offset: const Offset(-5, -5),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.red.shade400,
+                        Colors.red.shade600,
+                      ],
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.red.withOpacity(0.4),
+                        blurRadius: 20,
+                        offset: const Offset(0, 8),
+                      ),
+                      BoxShadow(
+                        color: Colors.white.withOpacity(0.2),
+                        blurRadius: 10,
+                        offset: const Offset(-3, -3),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.logout_rounded,
+                    color: Colors.white,
+                    size: 32,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Déconnexion',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    color: DashboardEnseignant.textColor,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Êtes-vous sûr de vouloir vous déconnecter ?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: DashboardEnseignant.hintColor,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 25),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(15),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.15),
+                              blurRadius: 10,
+                              offset: const Offset(0, 5),
+                            ),
+                          ],
+                        ),
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: DashboardEnseignant.textColor,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            textStyle: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          child: const Text('Annuler'),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(15),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.red.withOpacity(0.4),
+                              blurRadius: 15,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: ElevatedButton(
+                          onPressed: _logout,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            textStyle: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          child: const Text('Déconnexion'),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _updateUserName(String newName) {
     if (mounted) {
       setState(() {
@@ -460,8 +640,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     );
   }
 
-
-
   Widget _buildEmptyState() {
     return SingleChildScrollView(
       child: Padding(
@@ -597,6 +775,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       },
     );
   }
+
   Widget _buildHistoryLoadingState() {
     return Center(
       child: Column(
@@ -707,6 +886,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       ),
     );
   }
+
   Widget _buildHistoryErrorState() {
     return Center(
       child: Column(
@@ -797,6 +977,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       ),
     );
   }
+
   Widget _buildErrorHistoryCard() {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -863,6 +1044,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
       ),
     );
   }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1212,7 +1394,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
     }
   }
 
-
   Widget _buildProfilPage() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -1304,7 +1485,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: () => Navigator.pushReplacementNamed(context, 'login'),
+                    onPressed: _showLogoutConfirmation,
                     icon: Icon(Icons.logout_outlined, size: 18),
                     label: Text('Déconnexion'),
                     style: OutlinedButton.styleFrom(
@@ -1323,6 +1504,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
         ],
       ),
     );
+
   }
 
   Widget _buildProfilePhotoSection() {
@@ -2312,7 +2494,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
 
                 return isSmallScreen
                     ? IconButton(
-                  onPressed: () => _showLogoutConfirmation(),
+                  onPressed: _showLogoutConfirmation,
                   icon: Icon(
                     Icons.logout_rounded,
                     size: 20,
@@ -2320,7 +2502,7 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                   ),
                 )
                     : TextButton.icon(
-                  onPressed: () => _showLogoutConfirmation(),
+                  onPressed: _showLogoutConfirmation,
                   icon: Icon(
                     Icons.logout_rounded,
                     size: 16,
@@ -2411,175 +2593,6 @@ class _DashboardEnseignantState extends State<DashboardEnseignant> {
                     child: const Icon(Icons.person_outline_rounded),
                   ),
                   label: 'Profil',
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showLogoutConfirmation() {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                DashboardEnseignant.surfaceColor.withOpacity(0.95),
-                DashboardEnseignant.backgroundColor.withOpacity(0.9),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(25),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: 30,
-                offset: const Offset(0, 15),
-                spreadRadius: 2,
-              ),
-              BoxShadow(
-                color: Colors.white.withOpacity(0.1),
-                blurRadius: 10,
-                offset: const Offset(-5, -5),
-              ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 70,
-                  height: 70,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Colors.red.shade400,
-                        Colors.red.shade600,
-                      ],
-                    ),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.red.withOpacity(0.4),
-                        blurRadius: 20,
-                        offset: const Offset(0, 8),
-                      ),
-                      BoxShadow(
-                        color: Colors.white.withOpacity(0.2),
-                        blurRadius: 10,
-                        offset: const Offset(-3, -3),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.logout_rounded,
-                    color: Colors.white,
-                    size: 32,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Déconnexion',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: DashboardEnseignant.textColor,
-                    shadows: [
-                      Shadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Êtes-vous sûr de vouloir vous déconnecter ?',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: DashboardEnseignant.hintColor,
-                    fontSize: 15,
-                  ),
-                ),
-                const SizedBox(height: 25),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(15),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.15),
-                              blurRadius: 10,
-                              offset: const Offset(0, 5),
-                            ),
-                          ],
-                        ),
-                        child: ElevatedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: DashboardEnseignant.textColor,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            textStyle: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          child: const Text('Annuler'),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 15),
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(15),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.red.withOpacity(0.4),
-                              blurRadius: 15,
-                              offset: const Offset(0, 6),
-                            ),
-                          ],
-                        ),
-                        child: ElevatedButton(
-                          onPressed: () => Navigator.pushReplacementNamed(context, 'login'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            textStyle: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          child: const Text('Déconnexion'),
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
